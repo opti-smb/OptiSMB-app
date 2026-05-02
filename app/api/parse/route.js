@@ -1,120 +1,161 @@
+import { File } from 'node:buffer';
+
 export const runtime = 'nodejs';
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
+/** Large statements can take >60s locally; Vercel may cap lower unless configured. */
+export const maxDuration = 120;
 
-const PARSE_PROMPT = `You are a payment acquiring statement parser. Extract structured data from the provided statement content.
+/**
+ * Uploads are parsed only by the Python FastAPI service (`python/app.py`).
+ * Extraction + fee/volume math run in `statement_engine.py` before the response is returned.
+ *
+ * Set STATEMENT_PARSER_URL or default http://127.0.0.1:8000
+ */
 
-Return ONLY valid JSON with this exact structure (no markdown, no explanation):
-{
-  "acquirer_name": "string",
-  "billing_period": { "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" },
-  "merchant_id": "string or null",
-  "total_transaction_volume": number,
-  "total_fees_charged": number,
-  "effective_rate": number,
-  "interchange_fees": number,
-  "scheme_fees": number,
-  "service_fees": number,
-  "other_fees": number,
-  "currency": "USD",
-  "channel_split": {
-    "pos": { "volume": number, "fees": number },
-    "cnp": { "volume": number, "fees": number }
-  },
-  "fee_lines": [
-    { "type": "string", "rate": "string", "amount": number, "card_type": "string", "channel": "string", "confidence": "high|medium|low" }
-  ],
-  "parsing_confidence": "high|medium|low",
-  "notes": "string or null"
+const PARSER_BASE =
+  process.env.STATEMENT_PARSER_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000';
+
+function parserUrlLooksLocalhost(base) {
+  try {
+    const h = new URL(base).hostname;
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  } catch {
+    return true;
+  }
 }
 
-If you cannot determine a value from the content, use 0 for numbers and null for strings. Infer the acquirer name from any branding visible in the content. The effective_rate is total_fees_charged / total_transaction_volume * 100.`;
+function parserUnreachableMessage(base, errDetail) {
+  const tail = errDetail ? ` ${errDetail}` : '';
+  if (parserUrlLooksLocalhost(base)) {
+    return `Python parser at ${base} is not reachable.${tail} For local dev: run npm run parser (or uvicorn on port 8000).`;
+  }
+  return `Cannot reach statement parser at ${base}.${tail} Set STATEMENT_PARSER_URL in Vercel (or your host) to the public HTTPS URL of the FastAPI service, and ensure it is running.`;
+}
+
+/** Node multipart forwarding: use File from node:buffer (more reliable than Blob in some runtimes). */
+async function forwardToPythonParser(fileBuffer, uploadName, mimeType, currency) {
+  const out = new FormData();
+  const pyFile = new File([fileBuffer], uploadName || 'upload', {
+    type: mimeType || 'application/octet-stream',
+  });
+  out.append('file', pyFile);
+  out.append('currency', currency);
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 120_000);
+
+  try {
+    const res = await fetch(`${PARSER_BASE}/parse`, {
+      method: 'POST',
+      body: out,
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return {
+        ok: false,
+        status: res.status,
+        body: { success: false, reason: 'parser_bad_json', message: text.slice(0, 500) },
+      };
+    }
+    if (!res.ok) {
+      const detail = json?.detail ?? json?.message ?? text;
+      let message = 'Request failed';
+      let reason = 'parser_error';
+      if (typeof detail === 'string') {
+        message = detail;
+        reason = res.status === 422 ? 'parse_rejected' : 'parser_error';
+      } else if (detail && typeof detail === 'object') {
+        message = detail.message ?? detail.msg ?? JSON.stringify(detail);
+        if (detail.code === 'not_statement') reason = 'not_statement';
+        else if (detail.code === 'unsupported_type') reason = 'unsupported_type';
+        else if (res.status === 422) reason = 'parse_rejected';
+      }
+      return {
+        ok: false,
+        status: res.status,
+        body: {
+          success: false,
+          reason,
+          message,
+          code: typeof detail === 'object' ? detail.code : undefined,
+        },
+      };
+    }
+    return { ok: true, body: json };
+  } catch (e) {
+    const msg = e?.name === 'AbortError' ? 'Parser request timed out.' : String(e);
+    return {
+      ok: false,
+      status: 503,
+      body: {
+        success: false,
+        reason: 'parser_unreachable',
+        message: parserUnreachableMessage(PARSER_BASE, msg),
+      },
+    };
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 export async function POST(request) {
   try {
     const formData = await request.formData();
     const file = formData.get('file');
     const fileName = String(formData.get('fileName') || '');
-    const fileType = String(formData.get('fileType') || '');
+    const currency = String(formData.get('currency') || 'AUTO');
 
-    if (!OPENROUTER_API_KEY) {
-      return Response.json({ error: 'API key not configured' }, { status: 500 });
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      return Response.json({ success: false, reason: 'missing_file', message: 'No file uploaded.' }, { status: 400 });
     }
 
-    let content = '';
-    let parseMethod = 'llm';
+    // Buffer once and send as Blob — forwarding the browser File stream through Node fetch is unreliable.
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+    const uploadName = fileName || (typeof file.name === 'string' ? file.name : 'upload');
+    const mimeType = typeof file.type === 'string' ? file.type : '';
 
-    // Read text content from file
-    if (fileType.includes('csv') || fileName.endsWith('.csv') || fileType.includes('text')) {
-      const buffer = await file.arrayBuffer();
-      content = Buffer.from(buffer).toString('utf-8');
-      parseMethod = 'csv_llm';
-    } else if (fileType.includes('json')) {
-      const buffer = await file.arrayBuffer();
-      content = Buffer.from(buffer).toString('utf-8');
-      parseMethod = 'json_llm';
-    } else {
-      // PDF / XLSX: return a signal that demo data should be used
+    const py = await forwardToPythonParser(fileBuffer, uploadName, mimeType, currency);
+
+    if (py.ok && py.body?.success && py.body?.data) {
       return Response.json({
-        success: false,
-        reason: 'binary_format',
-        message: 'Binary file format detected. Using demo analysis data.',
+        success: true,
+        data: py.body.data,
+        method: py.body.method || 'python',
+        file_type: py.body.file_type,
+        extraction_ratio: py.body.extraction_ratio,
+        parser: 'fastapi',
       });
     }
 
-    if (!content || content.length < 20) {
-      return Response.json({ success: false, reason: 'empty', message: 'File appears to be empty.' });
-    }
-
-    // Truncate very large files to avoid token limits
-    const truncated = content.length > 12000 ? content.slice(0, 12000) + '\n[...truncated for parsing]' : content;
-
-    const response = await fetch(OR_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://optismb.com',
-        'X-Title': 'OptiSMB Parser',
+    const status = py.status >= 400 ? py.status : 503;
+    return Response.json(
+      py.body || {
+        success: false,
+        reason: 'parser_error',
+        message: 'Statement parsing failed.',
       },
-      body: JSON.stringify({
-        model: 'anthropic/claude-3-haiku',
-        messages: [
-          { role: 'system', content: PARSE_PROMPT },
-          {
-            role: 'user',
-            content: `Parse this payment acquiring statement:\n\nFilename: ${fileName}\n\nContent:\n${truncated}`,
-          },
-        ],
-        max_tokens: 2000,
-        temperature: 0,
-      }),
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('OpenRouter parse error:', err);
-      return Response.json({ success: false, reason: 'api_error', message: err });
-    }
-
-    const data = await response.json();
-    const rawContent = data.choices?.[0]?.message?.content || '';
-
-    // Strip markdown code fences if present
-    const jsonStr = rawContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      console.error('JSON parse failed:', rawContent);
-      return Response.json({ success: false, reason: 'parse_failed', message: 'Could not parse AI response as JSON.' });
-    }
-
-    return Response.json({ success: true, data: parsed, method: parseMethod });
+      { status },
+    );
   } catch (err) {
     console.error('Parse route error:', err);
-    return Response.json({ success: false, reason: 'internal', message: String(err) }, { status: 500 });
+    const msg =
+      err instanceof Error && err.message
+        ? `${err.name}: ${err.message}`
+        : String(err);
+    const hint = parserUrlLooksLocalhost(PARSER_BASE)
+      ? 'Check the terminal running `next dev` and ensure the Python parser is running (`npm run parser`).'
+      : 'Confirm STATEMENT_PARSER_URL points to your deployed parser and the service is healthy.';
+    return Response.json(
+      {
+        success: false,
+        reason: 'internal',
+        message: msg || `Unexpected error in /api/parse. ${hint}`,
+      },
+      { status: 500 },
+    );
   }
 }
