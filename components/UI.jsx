@@ -141,10 +141,11 @@ export function Select({ children, className = '', ...p }) {
 
 export function KPI({ label, value, delta, tone = 'ink', sub, big = false }) {
   const toneClass = { ink: 'text-ink', teal: 'text-teal', amber: 'text-amber', leaf: 'text-leaf', rose: 'text-rose' }[tone] || 'text-ink';
+  const valueSz = big ? 'text-3xl sm:text-4xl xl:text-5xl leading-tight' : 'text-3xl sm:text-4xl leading-tight';
   return (
-    <div className="p-5 flex flex-col gap-1">
+    <div className="p-5 flex flex-col gap-1 min-w-0">
       <div className="smallcaps text-ink-400">{label}</div>
-      <div className={`font-serif ${big ? 'text-5xl' : 'text-4xl'} leading-none tabular ${toneClass}`}>{value}</div>
+      <div className={`font-serif ${valueSz} tabular break-words ${toneClass}`}>{value}</div>
       {sub && <div className="text-[12px] text-ink-400 mt-1">{sub}</div>}
       {delta && <div className={`text-[12px] mt-1 tabular ${delta.tone === 'good' ? 'text-leaf' : delta.tone === 'bad' ? 'text-rose' : 'text-ink-400'}`}>{delta.text}</div>}
     </div>
@@ -169,12 +170,11 @@ export function ConfidenceBadge({ level = 'high', label, asOf }) {
 
 export function DualConfidence({ parsing = 'high', rate = 'medium', asOf = '12 Apr 2026' }) {
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-col gap-4">
       <div>
         <div className="smallcaps text-ink-400 mb-1">Parsing Confidence</div>
         <ConfidenceBadge level={parsing} asOf={asOf} />
       </div>
-      <div className="w-px self-stretch bg-ink/10 hidden sm:block" />
       <div>
         <div className="smallcaps text-ink-400 mb-1">Rate Data Confidence</div>
         <ConfidenceBadge level={rate} asOf={asOf} />

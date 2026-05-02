@@ -95,66 +95,110 @@ export default function DashboardPage() {
   const d = stmt?.parsedData;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <div className="smallcaps text-ink-400 mb-2">Welcome back, {user.business || user.name}</div>
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <h1 className="font-serif text-4xl md:text-[40px] leading-[1.1] w-full lg:w-auto lg:flex-1">
+    <div className="space-y-8 max-w-6xl mx-auto">
+      <header className="flex flex-col gap-5 border-b border-ink/8 pb-8">
+        <div>
+          <div className="smallcaps text-ink-400 mb-2">Welcome back, {user.business || user.name}</div>
+          <h1 className="font-serif text-4xl md:text-[42px] leading-[1.08] tracking-tight">
             Your acquiring health, <em className="text-teal">at a glance.</em>
           </h1>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={() => window.print()} className="inline-flex items-center gap-2 h-10 px-4 text-sm font-medium border hair rounded-full hover:bg-ink/5 transition no-print">
-              <Icon.Download size={14} />Export PDF
-            </button>
-            <Link href="/upload"><Btn variant="primary" icon={<Icon.Upload size={14} />}>New statement</Btn></Link>
-          </div>
         </div>
-      </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link href="/upload">
+            <Btn variant="primary" icon={<Icon.Upload size={14} />}>
+              New statement
+            </Btn>
+          </Link>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center justify-center gap-2 h-10 px-5 text-sm font-medium border hair rounded-full bg-cream-100 hover:bg-cream-200/80 transition no-print"
+          >
+            <Icon.Download size={14} />
+            Export PDF
+          </button>
+        </div>
+      </header>
 
       <OnboardingBanner />
       <StalenessAlert stmt={stmt} />
       <HumanReviewBanner queue={humanReviewQueue} />
 
-      {/* KPI cards */}
-      <div className="grid md:grid-cols-4 gap-4">
-        <Card>
-          <KPI label="Effective rate" value={d ? `${d.effective_rate.toFixed(2)}%` : '—'} tone="amber"
-            sub={<span>vs market avg <span className="font-mono text-ink">1.42%</span></span>}
-            delta={{ tone: 'bad', text: '+0.42pp above benchmark' }} />
-          <div className="px-5 pb-5">
-            <Sparkline points={[1.62, 1.7, 1.68, 1.74, 1.8, 1.82, 1.84]} />
-          </div>
-        </Card>
-        <Card>
-          <KPI label="Est. overpayment" value="$17.8k" sub="Per year, vs panel median" tone="rose"
-            delta={{ tone: 'bad', text: 'Action recommended' }} />
-          <div className="px-5 pb-5">
-            <Sparkline points={[9, 10, 11, 13, 12, 14, 14.2]} color="#B03A2E" />
-          </div>
-        </Card>
-        <Card>
-          <KPI label="Statements analysed" value={statements.length.toString()} sub="All time"
-            delta={{ tone: 'neutral', text: 'Next refresh: Apr 30' }} />
-          <div className="px-5 pb-5 flex gap-1">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className={`h-6 flex-1 rounded ${i < statements.length ? 'bg-ink' : 'bg-ink/10'}`} />
-            ))}
-          </div>
-        </Card>
-        <Card className="bg-ink text-cream border-ink">
-          <div className="p-5">
-            <div className="smallcaps text-teal-bright">Best saving available</div>
-            <div className="font-serif text-4xl leading-none tabular mt-1">$23k<span className="text-base text-cream/50">/yr</span></div>
-            <div className="text-[12px] text-cream/60 mt-2">Switching to <span className="text-cream">Stripe</span> — rate confidence: medium</div>
-            <Link href="/benchmark"><Btn variant="teal" size="sm" className="mt-4 whitespace-nowrap" icon={<Icon.ArrowRight size={12} />}>Details</Btn></Link>
-          </div>
-        </Card>
-      </div>
+      {/* KPI grid — balanced 2×2 + featured strip */}
+      <section aria-labelledby="dash-metrics-heading">
+        <h2 id="dash-metrics-heading" className="sr-only">
+          Key metrics
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Card className="min-w-0">
+            <KPI
+              label="Effective rate"
+              value={d ? `${d.effective_rate.toFixed(2)}%` : '—'}
+              tone="amber"
+              sub={
+                <span>
+                  vs market avg <span className="font-mono text-ink">1.42%</span>
+                </span>
+              }
+              delta={{ tone: 'bad', text: '+0.42pp above benchmark' }}
+            />
+            <div className="px-5 pb-5">
+              <Sparkline points={[1.62, 1.7, 1.68, 1.74, 1.8, 1.82, 1.84]} />
+            </div>
+          </Card>
+          <Card className="min-w-0">
+            <KPI
+              label="Est. overpayment"
+              value="$17.8k"
+              sub="Per year, vs panel median"
+              tone="rose"
+              delta={{ tone: 'bad', text: 'Action recommended' }}
+            />
+            <div className="px-5 pb-5">
+              <Sparkline points={[9, 10, 11, 13, 12, 14, 14.2]} color="#B03A2E" />
+            </div>
+          </Card>
+          <Card className="min-w-0 sm:col-span-2">
+            <div className="grid sm:grid-cols-2 gap-6 p-5 sm:p-6">
+              <div>
+                <KPI
+                  label="Statements analysed"
+                  value={statements.length.toString()}
+                  sub="All time"
+                  delta={{ tone: 'neutral', text: 'Next refresh: Apr 30' }}
+                />
+                <div className="mt-4 flex gap-1 max-w-xs">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={`h-2 flex-1 rounded-full ${i < statements.length ? 'bg-ink' : 'bg-ink/12'}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-ink text-cream p-5 flex flex-col justify-center border border-ink">
+                <div className="smallcaps text-teal-bright">Best saving available</div>
+                <div className="font-serif text-3xl sm:text-4xl leading-none tabular mt-2">
+                  $23k<span className="text-lg text-cream/50">/yr</span>
+                </div>
+                <p className="text-[12px] text-cream/60 mt-2 leading-relaxed">
+                  Switching to <span className="text-cream font-medium">Stripe</span> — rate confidence: medium
+                </p>
+                <Link href="/benchmark" className="mt-4">
+                  <Btn variant="teal" size="sm" className="whitespace-nowrap" icon={<Icon.ArrowRight size={12} />}>
+                    View benchmarks
+                  </Btn>
+                </Link>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </section>
 
       {/* Dual confidence explainer */}
-      <Card className="p-5 flex flex-wrap items-center justify-between gap-5">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-teal-dim flex items-center justify-center">
+      <Card className="p-5 md:p-6 flex flex-col gap-5">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-full bg-teal-dim flex items-center justify-center shrink-0">
             <Icon.Info className="text-teal" size={16} />
           </div>
           <div>
@@ -170,51 +214,68 @@ export default function DashboardPage() {
       </Card>
 
       {/* Recent analyses table */}
-      <Card>
-        <div className="p-5 flex items-center justify-between hair-b">
+      <Card className="overflow-hidden">
+        <div className="p-5 md:p-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between hair-b bg-cream-100/50">
           <div>
-            <h3 className="font-serif text-2xl">Recent analyses</h3>
-            <div className="text-[12px] text-ink-400">{statements.length} statement{statements.length !== 1 ? 's' : ''} uploaded</div>
+            <h3 className="font-serif text-2xl md:text-[26px]">Recent analyses</h3>
+            <div className="text-[12px] text-ink-400 mt-1">
+              {statements.length} statement{statements.length !== 1 ? 's' : ''} uploaded
+            </div>
           </div>
           <Link href="/analyses">
-            <button className="h-9 px-3 rounded-full border hair text-[13px] flex items-center gap-2 hover:bg-ink/5 transition">
+            <span className="inline-flex h-10 px-4 rounded-full border hair text-[13px] items-center gap-2 hover:bg-cream-200/80 transition cursor-pointer">
               <Icon.Filter size={13} /> View all
-            </button>
+            </span>
           </Link>
         </div>
         {statements.length === 0 ? (
-          <div className="p-10 text-center">
-            <div className="text-ink-400 text-[14px]">No statements uploaded yet.</div>
-            <Link href="/upload"><Btn variant="primary" className="mt-4" icon={<Icon.Upload size={14} />}>Upload your first statement</Btn></Link>
+          <div className="p-12 text-center">
+            <div className="text-ink-500 text-[15px]">No statements uploaded yet.</div>
+            <Link href="/upload">
+              <Btn variant="primary" className="mt-5" icon={<Icon.Upload size={14} />}>
+                Upload your first statement
+              </Btn>
+            </Link>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="smallcaps text-ink-400 bg-cream-200/40">
+              <thead className="smallcaps text-ink-400 bg-cream-200/50">
                 <tr>
-                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Status', 'Parsing conf.', 'Actions'].map(h => (
-                    <th key={h} className="text-left font-medium px-5 py-3">{h}</th>
+                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Status', 'Parsing conf.', 'Actions'].map((h) => (
+                    <th key={h} className="text-left font-medium px-5 py-3.5 whitespace-nowrap">
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-hair">
                 {statements.slice(0, 5).map((s) => (
-                  <tr key={s.id} className="group hover:bg-cream-200/40 transition">
-                    <td className="px-5 py-3 font-mono text-[13px] tabular">{s.uploadDate}</td>
-                    <td className="px-5 py-3">{s.period}</td>
-                    <td className="px-5 py-3">{s.acquirer}</td>
-                    <td className="px-5 py-3 font-mono tabular">{s.parsedData?.effective_rate?.toFixed(2) ?? '—'}%</td>
-                    <td className="px-5 py-3">
+                  <tr key={s.id} className="group hover:bg-cream-200/35 transition-colors">
+                    <td className="px-5 py-3.5 font-mono text-[13px] tabular text-ink-500">{s.uploadDate}</td>
+                    <td className="px-5 py-3.5 font-medium">{s.period}</td>
+                    <td className="px-5 py-3.5 max-w-[10rem] truncate" title={s.acquirer}>
+                      {s.acquirer}
+                    </td>
+                    <td className="px-5 py-3.5 font-mono tabular">{s.parsedData?.effective_rate?.toFixed(2) ?? '—'}%</td>
+                    <td className="px-5 py-3.5">
                       <Pill tone={s.status === 'Parsed' ? 'leaf' : s.status === 'Reviewing' ? 'amber' : 'rose'}>
-                        <span className={`dot ${s.status === 'Parsed' ? 'bg-leaf' : s.status === 'Reviewing' ? 'bg-amber' : 'bg-rose'}`} />
+                        <span
+                          className={`dot ${s.status === 'Parsed' ? 'bg-leaf' : s.status === 'Reviewing' ? 'bg-amber' : 'bg-rose'}`}
+                        />
                         {s.status}
                       </Pill>
                     </td>
-                    <td className="px-5 py-3"><ConfidenceBadge level={s.parsingConfidence} /></td>
-                    <td className="px-5 py-3">
-                      <Link href="/report" onClick={() => setCurrentStatementId(s.id)}
-                        className="text-[13px] underline underline-offset-2 text-ink opacity-60 group-hover:opacity-100 flex items-center gap-1">
-                        View report <Icon.ArrowUpRight size={12} />
+                    <td className="px-5 py-3.5">
+                      <ConfidenceBadge level={s.parsingConfidence} />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Link
+                        href="/report"
+                        onClick={() => setCurrentStatementId(s.id)}
+                        className="text-[13px] font-medium text-teal hover:text-ink inline-flex items-center gap-1 transition-colors"
+                      >
+                        Open <Icon.ArrowUpRight size={12} />
                       </Link>
                     </td>
                   </tr>
@@ -226,34 +287,55 @@ export default function DashboardPage() {
       </Card>
 
       {/* Quick actions */}
-      <div className="grid md:grid-cols-3 gap-4">
-        <Card className="p-6 bg-ink text-cream border-ink flex flex-col">
-          <div className="smallcaps text-teal-bright mb-3">Primary</div>
-          <h3 className="font-serif text-3xl leading-tight">Upload a new statement</h3>
-          <p className="text-cream/60 text-[13px] mt-2">PDF, CSV or XLSX up to 50MB. Analysis in under 60 seconds.</p>
-          <Link href="/upload" className="mt-6 self-start"><Btn variant="teal" icon={<Icon.Upload size={14} />}>Choose file</Btn></Link>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="p-6 bg-ink text-cream border-ink flex flex-col min-h-[200px]">
+          <div className="smallcaps text-teal-bright mb-2">Primary</div>
+          <h3 className="font-serif text-2xl leading-snug">New statement</h3>
+          <p className="text-cream/55 text-[13px] mt-2 flex-1 leading-relaxed">
+            PDF, CSV or XLSX up to 50MB. Typical analysis under 60 seconds.
+          </p>
+          <Link href="/upload" className="mt-5">
+            <Btn variant="teal" icon={<Icon.Upload size={14} />}>
+              Upload
+            </Btn>
+          </Link>
         </Card>
-        <Card className="p-6 flex flex-col">
-          <div className="smallcaps text-ink-400 mb-3">Reconciliation</div>
-          <h3 className="font-serif text-3xl leading-tight">Merchant agreement</h3>
-          <p className="text-ink-500 text-[13px] mt-2">Unlocks line-level discrepancy detection against your contracted rates.</p>
-          <div className="mt-6">
-            {tierOk(user.tier, 'L1')
-              ? <Link href="/agreement"><Btn variant="outline" icon={<Icon.FileText size={14} />}>Manage agreements</Btn></Link>
-              : <Link href="/upgrade"><Btn variant="outline" icon={<Icon.Lock size={14} />} disabled>Level 1 feature</Btn></Link>}
+        <Card className="p-6 flex flex-col min-h-[200px] border-ink/12">
+          <div className="smallcaps text-ink-400 mb-2">Compliance</div>
+          <h3 className="font-serif text-2xl leading-snug">Merchant agreement</h3>
+          <p className="text-ink-500 text-[13px] mt-2 flex-1 leading-relaxed">
+            Line-level checks against your contracted rates.
+          </p>
+          <div className="mt-5">
+            {tierOk(user.tier, 'L1') ? (
+              <Link href="/agreement">
+                <Btn variant="outline" icon={<Icon.FileText size={14} />}>
+                  Manage
+                </Btn>
+              </Link>
+            ) : (
+              <Link href="/upgrade">
+                <Btn variant="outline" icon={<Icon.Lock size={14} />} disabled>
+                  Level 1
+                </Btn>
+              </Link>
+            )}
           </div>
         </Card>
-        <Card className={`p-6 flex flex-col relative ${!tierOk(user.tier, 'L2') ? 'bg-cream-200/50' : ''}`}>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="smallcaps text-ink-400">What-if model</span>
-            {!tierOk(user.tier, 'L2') && <Pill tone="leaf">Level 2</Pill>}
+        <Card className={`p-6 flex flex-col min-h-[200px] ${!tierOk(user.tier, 'L2') ? 'bg-cream-200/40' : ''}`}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="smallcaps text-ink-400">Forecast</span>
+            {!tierOk(user.tier, 'L2') && <Pill tone="leaf">L2</Pill>}
           </div>
-          <h3 className="font-serif text-3xl leading-tight">Model a future rate</h3>
-          <p className="text-ink-500 text-[13px] mt-2">Sliders for volume, AOV, card mix. Recalculates savings live.</p>
-          <div className="mt-6">
+          <h3 className="font-serif text-2xl leading-snug">What-if model</h3>
+          <p className="text-ink-500 text-[13px] mt-2 flex-1 leading-relaxed">Volume, AOV, and card mix sliders.</p>
+          <div className="mt-5">
             <Link href="/whatif">
-              <Btn variant={tierOk(user.tier, 'L2') ? 'primary' : 'outline'} icon={tierOk(user.tier, 'L2') ? <Icon.Bolt size={14} /> : <Icon.Lock size={14} />}>
-                {tierOk(user.tier, 'L2') ? 'Open modeller' : 'Upgrade to unlock'}
+              <Btn
+                variant={tierOk(user.tier, 'L2') ? 'primary' : 'outline'}
+                icon={tierOk(user.tier, 'L2') ? <Icon.Bolt size={14} /> : <Icon.Lock size={14} />}
+              >
+                {tierOk(user.tier, 'L2') ? 'Open' : 'Upgrade'}
               </Btn>
             </Link>
           </div>

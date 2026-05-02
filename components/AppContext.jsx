@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { mockStatements, mockNotifications, mockSavedScenarios, mockMerchantAgreements } from '@/lib/mockData';
 import { generateId } from '@/lib/utils';
+import { getStatementDisplayCurrency, formatMoney } from '@/lib/currencyConversion';
 
 const AppContext = createContext(null);
 
@@ -135,10 +136,17 @@ export function AppProvider({ children }) {
       simulateEmail('parse_complete', stmt);
     }
 
+    const ccy = getStatementDisplayCurrency(stmt.parsedData);
+    const gv = stmt.parsedData?.total_transaction_volume;
+    const volPart =
+      gv != null && Number.isFinite(Number(gv))
+        ? `${formatMoney(Number(gv), ccy)} (${ccy}) · `
+        : `${ccy} · `;
+
     addNotification({
       type: 'parse_complete',
       title: `Parsing complete — ${stmt.acquirer} ${stmt.period}`,
-      message: `${stmt.fileName} parsed successfully. Effective rate ${stmt.parsedData?.effective_rate?.toFixed(2) ?? '—'}%.`,
+      message: `${stmt.fileName} parsed. ${volPart}effective rate ${stmt.parsedData?.effective_rate?.toFixed(2) ?? '—'}%.`,
       date: new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
       emailSent: user.notifyParseComplete,
     });

@@ -4,26 +4,18 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import * as Icon from '@/components/Icons';
 import { Btn, Card, DualConfidence, Disclaimer } from '@/components/UI';
+import { StatementParseLoading } from '@/components/StatementParseLoading';
 import { useApp } from '@/components/AppContext';
 import { useToast } from '@/components/Toast';
-import { readFileAsText, tierOk } from '@/lib/utils';
+import { tierOk } from '@/lib/utils';
 import { mockStatements } from '@/lib/mockData';
-
-const PARSE_STAGES = [
-  'Detecting format & encoding',
-  'Template matching (known acquirer)',
-  'AI extraction — fee lines',
-  'Confidence scoring per field',
-  'Calculating effective rate',
-  'Benchmarking against database',
-];
+import { finalizeParsedForClient, getStatementDisplayCurrency, formatMoney } from '@/lib/currencyConversion';
+import { getBenchmarkAnalysis } from '@/lib/computeBenchmarkAnalysis';
 
 export default function UploadPage() {
   const [step, setStep] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-  const [stageIdx, setStageIdx] = useState(0);
   const [file, setFile] = useState(null);
+  const parsingRef = useRef(false);
   const [isDrag, setIsDrag] = useState(false);
   const [dupWarning, setDupWarning] = useState(null);
   const [pendingFile, setPendingFile] = useState(null);
@@ -37,25 +29,9 @@ export default function UploadPage() {
   const { addToast } = useToast();
   const router = useRouter();
 
-  const animateProgress = (onComplete) => {
-    const start = Date.now();
-    const totalMs = 5000;
-    setStageIdx(0);
-    const t = setInterval(() => {
-      const e = (Date.now() - start) / 1000;
-      setElapsed(e);
-      const pct = Math.min(99, (e / (totalMs / 1000)) * 100);
-      setProgress(pct);
-      setStageIdx(Math.min(PARSE_STAGES.length - 1, Math.floor((pct / 100) * PARSE_STAGES.length)));
-      if (pct >= 99) {
-        clearInterval(t);
-        onComplete();
-      }
-    }, 80);
-    return t;
-  };
-
   const processFile = async (f) => {
+    if (parsingRef.current) return;
+    parsingRef.current = true;
     setFile(f);
     setStep(1);
     setParseError(null);
@@ -65,30 +41,56 @@ export default function UploadPage() {
       formData.append('file', f);
       formData.append('fileName', f.name);
       formData.append('fileType', f.type);
+      formData.append('currency', 'AUTO');
 
-      const apiCallPromise = fetch('/api/parse', { method: 'POST', body: formData })
-        .then(r => r.json())
-        .catch(() => null);
-
-      await new Promise(resolve => animateProgress(resolve));
-      setProgress(100);
-
-      const apiResult = await apiCallPromise;
+      const res = await fetch('/api/parse', { method: 'POST', body: formData });
+      const apiResult = await res.json().catch(() => null);
 
       let finalData;
-      let isBinary = false;
       let parseMethod = 'demo';
+      let isDemo = false;
 
       if (apiResult?.success && apiResult?.data) {
-        finalData = apiResult.data;
-        parseMethod = apiResult.method || 'llm';
+        let pd = finalizeParsedForClient(apiResult.data);
+        const bench = getBenchmarkAnalysis(pd);
+        if (bench) pd = { ...pd, benchmark_analysis: bench };
+        finalData = pd;
+        parseMethod = apiResult.method || apiResult.parser || 'python';
       } else {
-        isBinary = apiResult?.reason === 'binary_format';
-        finalData = mockStatements[0].parsedData;
+        isDemo = true;
+        let pd = finalizeParsedForClient({ ...mockStatements[0].parsedData });
+        const bench = getBenchmarkAnalysis(pd);
+        if (bench) pd = { ...pd, benchmark_analysis: bench };
+        finalData = pd;
+        const reason = apiResult?.reason;
+        if (reason === 'parser_unreachable') {
+          addToast({
+            type: 'error',
+            title: 'Parser not reachable',
+            message:
+              apiResult?.message ||
+              'The statement parser service is unavailable. On Vercel, set STATEMENT_PARSER_URL to your deployed API. Locally, run npm run parser (port 8000).',
+          });
+        } else if (reason === 'not_statement') {
+          addToast({
+            type: 'error',
+            title: 'Not a payment statement',
+            message: apiResult?.message || 'Upload a merchant or bank statement.',
+          });
+        } else {
+          addToast({
+            type: 'info',
+            title: 'Using demo analysis',
+            message:
+              apiResult?.message ||
+              'Live parse failed — showing sample data. Fix parser or upload CSV for best results.',
+          });
+        }
       }
 
       const now = new Date();
       const uploadDate = now.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+      const ccy = getStatementDisplayCurrency(finalData);
 
       const stmt = {
         fileName: f.name,
@@ -98,7 +100,7 @@ export default function UploadPage() {
           : now.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         uploadDate,
         status: finalData.parsing_confidence === 'low' ? 'Reviewing' : 'Parsed',
-        parsingConfidence: finalData.parsing_confidence || (isBinary ? 'medium' : 'high'),
+        parsingConfidence: finalData.parsing_confidence || (isDemo ? 'medium' : 'high'),
         rateConfidence: 'medium',
         dataAsOf: uploadDate,
         source: apiResult?.success ? 'live' : 'demo',
@@ -116,19 +118,29 @@ export default function UploadPage() {
       setParsedResult(stmt);
       setStep(2);
 
-      if (isBinary) {
-        addToast({ type: 'info', title: 'Demo data used', message: 'Binary format detected (PDF/XLSX). Showing sample analysis. Upload CSV for real AI extraction.' });
-      } else if (apiResult?.success) {
-        addToast({ type: 'success', title: 'Statement parsed', message: `${finalData.fee_lines?.length || 0} fee lines extracted via ${parseMethod}.` });
+      if (apiResult?.success) {
+        const vol = stmt.parsedData?.total_transaction_volume;
+        const volStr = vol != null && Number.isFinite(Number(vol)) ? formatMoney(Number(vol), ccy) : '—';
+        addToast({
+          type: 'success',
+          title: 'Statement parsed',
+          message: `${stmt.parsedData?.fee_lines?.length || 0} fee lines · ${volStr} (${ccy}) · ${parseMethod}`,
+        });
       }
 
       if (stmt.parsingConfidence === 'low') {
-        addToast({ type: 'info', title: 'Under human review', message: 'Document confidence is low. Our team will verify this analysis within 4 business hours.' });
+        addToast({
+          type: 'info',
+          title: 'Under human review',
+          message: 'Document confidence is low. Our team will verify this analysis within 4 business hours.',
+        });
       }
     } catch (err) {
       setParseError(String(err));
       setStep(0);
       addToast({ type: 'error', title: 'Upload failed', message: 'Please try again or contact support.' });
+    } finally {
+      parsingRef.current = false;
     }
   };
 
@@ -191,6 +203,13 @@ export default function UploadPage() {
   };
 
   const STEPPER = ['01 Select file', '02 Parsing', '03 Review & open'];
+
+  const reviewCcy = parsedResult ? getStatementDisplayCurrency(parsedResult.parsedData) : 'USD';
+  const reviewVol = parsedResult?.parsedData?.total_transaction_volume;
+  const reviewVolStr =
+    reviewVol != null && Number.isFinite(Number(reviewVol))
+      ? formatMoney(Number(reviewVol), reviewCcy)
+      : '—';
 
   return (
     <div className="space-y-6">
@@ -269,37 +288,10 @@ export default function UploadPage() {
         </Card>
       )}
 
-      {/* Step 1: Parsing */}
+      {/* Step 1: Parsing (real await on /api/parse — no fake progress) */}
       {step === 1 && (
-        <Card className="p-10">
-          <div className="flex flex-col items-center text-center">
-            <div className="relative w-28 h-28 mb-6">
-              <div className="absolute inset-0 rounded-full border-2 border-ink/10" />
-              <div className="absolute inset-0 rounded-full border-2 border-ink border-t-transparent spin" />
-              <div className="absolute inset-0 flex items-center justify-center"><Icon.FileText size={30} /></div>
-            </div>
-            <h3 className="font-serif text-3xl">Parsing your statement…</h3>
-            <div className="font-mono text-[12px] text-ink-400 mt-1">elapsed {elapsed.toFixed(1)}s · target P95 60s</div>
-            <div className="w-full max-w-md mt-6">
-              <div className="h-1.5 bg-ink/10 rounded-full overflow-hidden">
-                <div className="h-full bg-teal transition-all duration-200 rounded-full" style={{ width: `${progress}%` }} />
-              </div>
-              <div className="mt-5 space-y-2 text-[13px] text-left">
-                {PARSE_STAGES.map((t, i) => {
-                  const done = i < stageIdx, active = i === stageIdx;
-                  return (
-                    <div key={i} className={`flex items-center gap-2 ${done || active ? 'text-ink' : 'text-ink-300'}`}>
-                      {done ? <Icon.Check size={14} className="text-leaf shrink-0" /> : active ? <span className="dot bg-teal-bright pulse-ring shrink-0" /> : <span className="dot bg-ink/20 shrink-0" />}
-                      <span>{t}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            {file && file.name !== 'worldpay-mar26.pdf' && (
-              <div className="mt-5 font-mono text-[12px] text-ink-400">{file.name}</div>
-            )}
-          </div>
+        <Card className="p-6 sm:p-10">
+          <StatementParseLoading active fileName={file?.name} />
         </Card>
       )}
 
@@ -319,8 +311,7 @@ export default function UploadPage() {
                   : `Parsed successfully — ${parsedResult.parsedData?.fee_lines?.length || 0} fee lines, ${parsedResult.source === 'live' ? 'real AI extraction' : 'demo data'}.`}
               </div>
               <div className="text-[12px] text-ink-400">
-                {parsedResult.acquirer} · {parsedResult.period} ·{' '}
-                ${((parsedResult.parsedData?.total_transaction_volume || 355000) / 1000).toFixed(0)}k volume ·{' '}
+                {parsedResult.acquirer} · {parsedResult.period} · {reviewVolStr} volume ({reviewCcy}) ·{' '}
                 effective rate {parsedResult.parsedData?.effective_rate?.toFixed(2)}%
               </div>
             </div>
@@ -330,7 +321,7 @@ export default function UploadPage() {
 
           {parsedResult.source === 'demo' && (
             <Disclaimer tone="warn">
-              This analysis uses demo data because your file was binary-encoded (PDF/XLSX). For real AI fee-line extraction, upload a CSV statement — we'll parse every line and score each field.
+              This preview uses sample data because live parsing did not return a result (parser unavailable, unsupported content, or network error). In production, configure the parser API URL for your host (e.g. STATEMENT_PARSER_URL on Vercel). Locally, run the Python service on port 8000. CSV uploads usually give the most reliable extraction.
             </Disclaimer>
           )}
 
@@ -368,7 +359,7 @@ export default function UploadPage() {
           )}
 
           <div className="flex gap-3">
-            <Btn variant="ghost" onClick={() => { setStep(0); setFile(null); setParsedResult(null); setProgress(0); setElapsed(0); }}>
+            <Btn variant="ghost" onClick={() => { setStep(0); setFile(null); setParsedResult(null); }}>
               Upload another
             </Btn>
           </div>
