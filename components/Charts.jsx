@@ -34,7 +34,7 @@ export function HBar({ data, max }) {
   return (
     <div className="space-y-3">
       {data.map((d, i) => (
-        <div key={`${d.label}-${i}`}>
+        <div key={i}>
           <div className="flex items-baseline justify-between text-[12px] mb-1">
             <span className="text-ink-500">{d.label}</span>
             <span className="tabular font-mono text-ink">{d.display || d.value}</span>
@@ -60,6 +60,45 @@ export function Sparkline({ points, width = 120, height = 36, color = '#00A88A' 
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
       <path d={area} fill={color} opacity="0.12" />
       <path d={d} stroke={color} strokeWidth="1.5" fill="none" />
+    </svg>
+  );
+}
+
+export function LineChart({ series, width = 640, height = 220, xLabels = [] }) {
+  const pad = { l: 36, r: 12, t: 12, b: 24 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const all = series.flatMap(s => s.data);
+  const max = Math.max(...all) * 1.1;
+  const min = 0;
+  const xStep = w / (series[0].data.length - 1);
+  const yTicks = [0, 0.5, 1].map(t => min + t * (max - min));
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`}>
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={pad.l} x2={width - pad.r} y1={pad.t + h - (v / max) * h} y2={pad.t + h - (v / max) * h} stroke="rgba(15,27,45,0.08)" />
+          <text x={pad.l - 6} y={pad.t + h - (v / max) * h + 3} fontSize="10" textAnchor="end" fill="#8B94A3" fontFamily="'JetBrains Mono', monospace">{v.toFixed(2)}</text>
+        </g>
+      ))}
+      {xLabels.map((l, i) => (
+        <text key={i} x={pad.l + i * xStep} y={height - 6} fontSize="10" textAnchor="middle" fill="#8B94A3">{l}</text>
+      ))}
+      {series.map((s, si) => {
+        const d = s.data.map((v, i) => {
+          const x = pad.l + i * xStep;
+          const y = pad.t + h - (v / max) * h;
+          return (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+        }).join(' ');
+        return (
+          <g key={si}>
+            <path d={d} fill="none" stroke={s.color} strokeWidth={s.dashed ? 1.4 : 2} strokeDasharray={s.dashed ? '4 4' : ''} />
+            {s.data.map((v, i) => (
+              <circle key={i} cx={pad.l + i * xStep} cy={pad.t + h - (v / max) * h} r="2.5" fill={s.color} />
+            ))}
+          </g>
+        );
+      })}
     </svg>
   );
 }

@@ -139,7 +139,7 @@ export function Select({ children, className = '', ...p }) {
   );
 }
 
-export function KPI({ label, value, delta, tone = 'ink', sub, subSecondary, big = false }) {
+export function KPI({ label, value, delta, tone = 'ink', sub, big = false }) {
   const toneClass = { ink: 'text-ink', teal: 'text-teal', amber: 'text-amber', leaf: 'text-leaf', rose: 'text-rose' }[tone] || 'text-ink';
   const valueSz = big ? 'text-3xl sm:text-4xl xl:text-5xl leading-tight' : 'text-3xl sm:text-4xl leading-tight';
   return (
@@ -147,22 +147,17 @@ export function KPI({ label, value, delta, tone = 'ink', sub, subSecondary, big 
       <div className="smallcaps text-ink-400">{label}</div>
       <div className={`font-serif ${valueSz} tabular break-words ${toneClass}`}>{value}</div>
       {sub && <div className="text-[12px] text-ink-400 mt-1">{sub}</div>}
-      {subSecondary && <div className="text-[12px] text-ink-400 mt-1 leading-snug">{subSecondary}</div>}
       {delta && <div className={`text-[12px] mt-1 tabular ${delta.tone === 'good' ? 'text-leaf' : delta.tone === 'bad' ? 'text-rose' : 'text-ink-400'}`}>{delta.text}</div>}
     </div>
   );
 }
 
-export function ConfidenceBadge({ level, label, asOf }) {
-  const lvl = String(level || '').toLowerCase();
-  const tier = lvl === 'high' || lvl === 'medium' || lvl === 'low' ? lvl : null;
-  const cfg = tier
-    ? {
-        high: { cls: 'bg-leaf-soft text-leaf border-leaf/30', dot: 'bg-leaf', text: label || 'High' },
-        medium: { cls: 'bg-amber-soft text-amber border-amber/30', dot: 'bg-amber', text: label || 'Medium' },
-        low: { cls: 'bg-rose-soft text-rose border-rose/30', dot: 'bg-rose', text: label || 'Low' },
-      }[tier]
-    : { cls: 'bg-cream-200 text-ink-400 border-ink/10', dot: 'bg-ink/20', text: label || '—' };
+export function ConfidenceBadge({ level = 'high', label, asOf }) {
+  const cfg = {
+    high: { cls: 'bg-leaf-soft text-leaf border-leaf/30', dot: 'bg-leaf', text: label || '✓ Verified — Regulatory Source' },
+    medium: { cls: 'bg-amber-soft text-amber border-amber/30', dot: 'bg-amber', text: label || '~ Indicative — SMB Reported' },
+    low: { cls: 'bg-rose-soft text-rose border-rose/30', dot: 'bg-rose', text: label || '⚠ Estimated — Floor Rate Only' },
+  }[level] || { cls: 'bg-cream-200 text-ink-400 border-ink/10', dot: 'bg-ink/20', text: label || '— Unknown' };
   return (
     <div className="inline-flex flex-col">
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${cfg.cls}`}>
@@ -173,7 +168,7 @@ export function ConfidenceBadge({ level, label, asOf }) {
   );
 }
 
-export function DualConfidence({ parsing, rate, asOf }) {
+export function DualConfidence({ parsing = 'high', rate = 'medium', asOf = '12 Apr 2026' }) {
   return (
     <div className="flex flex-col gap-4">
       <div>

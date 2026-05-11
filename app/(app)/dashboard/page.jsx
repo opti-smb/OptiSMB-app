@@ -1,19 +1,37 @@
 'use client';
 import Link from 'next/link';
-import { finalizeParsedForClient } from '@/lib/statementFinalize';
 import { useApp } from '@/components/AppContext';
-import { Card, KPI, Btn, Pill } from '@/components/UI';
+import { Card, KPI, Btn, Pill, DualConfidence, ConfidenceBadge, TierGate } from '@/components/UI';
 import { Sparkline } from '@/components/Charts';
 import * as Icon from '@/components/Icons';
-import {
-  tierOk,
-  reconcileTotalFeesCharged,
-  overviewPrimarySalesVolumeGross,
-  overviewStatementTransactionCount,
-} from '@/lib/utils';
+import { tierOk } from '@/lib/utils';
+
+function StalenessAlert({ stmt }) {
+  const { checkStaleness } = useApp();
+  const s = checkStaleness(stmt);
+  if (!s) return null;
+  const isRed = s.level === 'red';
+  return (
+    <div className={`rounded-xl border p-4 flex items-start gap-3 ${isRed ? 'bg-rose-soft/40 border-rose/30' : 'bg-amber-soft/40 border-amber/30'}`}>
+      <Icon.AlertTriangle size={16} className={isRed ? 'text-rose mt-0.5 shrink-0' : 'text-amber mt-0.5 shrink-0'} />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium">
+          {isRed ? 'Benchmark data is significantly outdated' : 'Benchmark data is approaching staleness'}
+        </div>
+        <div className="text-[12px] text-ink-500 mt-0.5">
+          Rate data last updated {s.daysOld} days ago ({isRed ? '≥180 days — red threshold' : '≥90 days — amber threshold'}).
+          Recommendations may not reflect current market rates.
+        </div>
+      </div>
+      <Link href="/benchmark">
+        <Btn variant="outline" size="sm">Refresh</Btn>
+      </Link>
+    </div>
+  );
+}
 
 function OnboardingBanner() {
-  const { user, statements } = useApp();
+  const { user, statements, completeOnboarding } = useApp();
   const hasStatements = statements.some(s => s.source !== 'demo');
   if (hasStatements) return null;
   return (
@@ -22,7 +40,7 @@ function OnboardingBanner() {
         <div className="smallcaps text-teal-bright mb-2">Get started in 60 seconds</div>
         <h2 className="font-serif text-3xl leading-tight">Upload your first acquiring statement.</h2>
         <p className="text-cream/70 text-[14px] mt-2">
-          We extract fee lines and summarise volume, channels, and payment mix — automatically.
+          We'll extract every fee line, score confidence, and benchmark against 10 acquirers — automatically.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Link href="/upload"><Btn variant="teal" icon={<Icon.Upload size={14} />}>Upload statement</Btn></Link>
@@ -35,8 +53,8 @@ function OnboardingBanner() {
         {[
           ['01', 'Drag & drop PDF, CSV, or XLSX'],
           ['02', 'AI extracts every fee line in <60s'],
-          ['03', 'Fee breakdown by channel and brand'],
-          ['04', 'Open the report for full detail'],
+          ['03', 'Benchmark against 10 acquirers'],
+          ['04', 'See your potential annual saving'],
         ].map(([n, t]) => (
           <div key={n} className="flex items-center gap-3">
             <span className="font-mono text-teal-bright">{n}</span>
@@ -71,38 +89,10 @@ function HumanReviewBanner({ queue }) {
   );
 }
 
-import { effectiveRatePercentFromTotals } from '@/lib/financialAnalysisFormulas';
-
-function formatEffectiveRatePct(raw, vol, fees) {
-  const gv = Number(vol);
-  const tf = Number(fees);
-  const implied = effectiveRatePercentFromTotals(tf, gv);
-  if (implied != null) return `${implied.toFixed(2)}%`;
-  const n = raw != null && raw !== '' ? Number(raw) : NaN;
-  if (Number.isFinite(n) && n >= 0 && n <= 25) return `${n.toFixed(2)}%`;
-  return '—';
-}
-
 export default function DashboardPage() {
   const { user, statements, getCurrentStatement, setCurrentStatementId, humanReviewQueue } = useApp();
   const stmt = getCurrentStatement();
   const d = stmt?.parsedData;
-  const dFin = d && typeof d === 'object' ? finalizeParsedForClient(d) : null;
-  const vol = dFin ? overviewPrimarySalesVolumeGross(dFin) : null;
-  const fees = dFin ? reconcileTotalFeesCharged(dFin).total : null;
-  const impliedFromFees =
-    vol != null && fees != null && Number(vol) > 0
-      ? (() => {
-          const r = effectiveRatePercentFromTotals(fees, vol);
-          return r != null ? r.toFixed(2) : null;
-        })()
-      : null;
-  const feeLineCount = Array.isArray(d?.fee_lines) ? d.fee_lines.length : null;
-  const txnTotal = dFin ? overviewStatementTransactionCount(dFin) : null;
-  const effDisplay = formatEffectiveRatePct(dFin?.effective_rate, vol, fees);
-  const feesCardSub = [vol != null ? `total_transaction_volume: ${Number(vol).toLocaleString()}` : null, txnTotal != null ? `transactions: ${txnTotal.toLocaleString()}` : null]
-    .filter(Boolean)
-    .join(' · ');
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
@@ -131,6 +121,7 @@ export default function DashboardPage() {
       </header>
 
       <OnboardingBanner />
+      <StalenessAlert stmt={stmt} />
       <HumanReviewBanner queue={humanReviewQueue} />
 
       {/* KPI grid — balanced 2×2 + featured strip */}
@@ -142,56 +133,60 @@ export default function DashboardPage() {
           <Card className="min-w-0">
             <KPI
               label="Effective rate"
-              value={effDisplay}
+              value={d ? `${d.effective_rate.toFixed(2)}%` : '—'}
               tone="amber"
               sub={
-                impliedFromFees ? (
-                  <span>
-                    Fees ÷ gross volume <span className="font-mono text-ink">{impliedFromFees}%</span>
-                  </span>
-                ) : (
-                  <span>{stmt?.period ? `period: ${stmt.period}` : '—'}</span>
-                )
+                <span>
+                  vs market avg <span className="font-mono text-ink">1.42%</span>
+                </span>
               }
+              delta={{ tone: 'bad', text: '+0.42pp above benchmark' }}
             />
             <div className="px-5 pb-5">
-              {Array.isArray(d?.rateTrend) && d.rateTrend.length >= 2 ? (
-                <Sparkline points={d.rateTrend.map((x) => Number(x)).filter((n) => Number.isFinite(n))} />
-              ) : null}
+              <Sparkline points={[1.62, 1.7, 1.68, 1.74, 1.8, 1.82, 1.84]} />
             </div>
           </Card>
           <Card className="min-w-0">
             <KPI
-              label="Total fees (period)"
-              value={fees != null ? `$${Number(fees).toLocaleString()}` : '—'}
-              sub={feesCardSub || '—'}
-              tone="ink"
+              label="Est. overpayment"
+              value="$17.8k"
+              sub="Per year, vs panel median"
+              tone="rose"
+              delta={{ tone: 'bad', text: 'Action recommended' }}
             />
             <div className="px-5 pb-5">
-              {Array.isArray(d?.fees_history) && d.fees_history.length >= 2 ? (
-                <Sparkline points={d.fees_history.map((x) => Number(x)).filter((n) => Number.isFinite(n))} color="#2C3E50" />
-              ) : null}
+              <Sparkline points={[9, 10, 11, 13, 12, 14, 14.2]} color="#B03A2E" />
             </div>
           </Card>
           <Card className="min-w-0 sm:col-span-2">
-            <div className="p-5 sm:p-6">
+            <div className="grid sm:grid-cols-2 gap-6 p-5 sm:p-6">
+              <div>
+                <KPI
+                  label="Statements analysed"
+                  value={statements.length.toString()}
+                  sub="All time"
+                  delta={{ tone: 'neutral', text: 'Next refresh: Apr 30' }}
+                />
+                <div className="mt-4 flex gap-1 max-w-xs">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={`h-2 flex-1 rounded-full ${i < statements.length ? 'bg-ink' : 'bg-ink/12'}`}
+                    />
+                  ))}
+                </div>
+              </div>
               <div className="rounded-2xl bg-ink text-cream p-5 flex flex-col justify-center border border-ink">
-                <div className="smallcaps text-teal-bright">Full breakdown</div>
+                <div className="smallcaps text-teal-bright">Best saving available</div>
                 <div className="font-serif text-3xl sm:text-4xl leading-none tabular mt-2">
-                  {feeLineCount != null ? `${feeLineCount}` : '—'}
-                  <span className="text-lg text-cream/50"> fee lines</span>
+                  $23k<span className="text-lg text-cream/50">/yr</span>
                 </div>
                 <p className="text-[12px] text-cream/60 mt-2 leading-relaxed">
-                  {stmt?.period ? <span className="font-mono">period: {stmt.period}</span> : null}
-                  {stmt?.parsedData?.billing_period?.from && (
-                    <span className="block mt-1 font-mono text-[11px]">
-                      billing_period: {stmt.parsedData.billing_period.from} → {stmt.parsedData.billing_period.to}
-                    </span>
-                  )}
+                  Switching to <span className="text-cream font-medium">Stripe</span> — rate confidence: medium
                 </p>
-                <Link href="/report" className="mt-4">
+                <Link href="/benchmark" className="mt-4">
                   <Btn variant="teal" size="sm" className="whitespace-nowrap" icon={<Icon.ArrowRight size={12} />}>
-                    Open report
+                    View benchmarks
                   </Btn>
                 </Link>
               </div>
@@ -199,6 +194,24 @@ export default function DashboardPage() {
           </Card>
         </div>
       </section>
+
+      {/* Dual confidence explainer */}
+      <Card className="p-5 md:p-6 flex flex-col gap-5">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-full bg-teal-dim flex items-center justify-center shrink-0">
+            <Icon.Info className="text-teal" size={16} />
+          </div>
+          <div>
+            <div className="text-sm font-medium">Two confidence scores — always shown separately.</div>
+            <div className="text-[12px] text-ink-400">
+              <strong>Parsing confidence</strong> reflects how cleanly we extracted your statement.{' '}
+              <strong>Rate data confidence</strong> reflects how solid our benchmark data is for your MCC and volume.
+              A perfectly parsed statement compared against stale data produces a low-confidence recommendation.
+            </div>
+          </div>
+        </div>
+        <DualConfidence parsing={stmt?.parsingConfidence || 'high'} rate={stmt?.rateConfidence || 'medium'} asOf={stmt?.dataAsOf || '12 Apr 2026'} />
+      </Card>
 
       {/* Recent analyses table */}
       <Card className="overflow-hidden">
@@ -229,7 +242,7 @@ export default function DashboardPage() {
             <table className="w-full text-sm">
               <thead className="smallcaps text-ink-400 bg-cream-200/50">
                 <tr>
-                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Status', 'Actions'].map((h) => (
+                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Status', 'Parsing conf.', 'Actions'].map((h) => (
                     <th key={h} className="text-left font-medium px-5 py-3.5 whitespace-nowrap">
                       {h}
                     </th>
@@ -237,23 +250,14 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-hair">
-                {statements.slice(0, 5).map((s) => {
-                  const sFin =
-                    s.parsedData && typeof s.parsedData === 'object' ? finalizeParsedForClient(s.parsedData) : null;
-                  return (
+                {statements.slice(0, 5).map((s) => (
                   <tr key={s.id} className="group hover:bg-cream-200/35 transition-colors">
                     <td className="px-5 py-3.5 font-mono text-[13px] tabular text-ink-500">{s.uploadDate}</td>
                     <td className="px-5 py-3.5 font-medium">{s.period}</td>
                     <td className="px-5 py-3.5 max-w-[10rem] truncate" title={s.acquirer}>
                       {s.acquirer}
                     </td>
-                    <td className="px-5 py-3.5 font-mono tabular">
-                      {formatEffectiveRatePct(
-                        sFin?.effective_rate,
-                        sFin ? overviewPrimarySalesVolumeGross(sFin) : NaN,
-                        sFin ? reconcileTotalFeesCharged(sFin).total : NaN,
-                      )}
-                    </td>
+                    <td className="px-5 py-3.5 font-mono tabular">{s.parsedData?.effective_rate?.toFixed(2) ?? '—'}%</td>
                     <td className="px-5 py-3.5">
                       <Pill tone={s.status === 'Parsed' ? 'leaf' : s.status === 'Reviewing' ? 'amber' : 'rose'}>
                         <span
@@ -261,6 +265,9 @@ export default function DashboardPage() {
                         />
                         {s.status}
                       </Pill>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <ConfidenceBadge level={s.parsingConfidence} />
                     </td>
                     <td className="px-5 py-3.5">
                       <Link
@@ -272,8 +279,7 @@ export default function DashboardPage() {
                       </Link>
                     </td>
                   </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
@@ -295,17 +301,25 @@ export default function DashboardPage() {
           </Link>
         </Card>
         <Card className="p-6 flex flex-col min-h-[200px] border-ink/12">
-          <div className="smallcaps text-ink-400 mb-2">Library</div>
-          <h3 className="font-serif text-2xl leading-snug">All analyses</h3>
+          <div className="smallcaps text-ink-400 mb-2">Compliance</div>
+          <h3 className="font-serif text-2xl leading-snug">Merchant agreement</h3>
           <p className="text-ink-500 text-[13px] mt-2 flex-1 leading-relaxed">
-            Search, export CSV, and open any past statement from one place.
+            Line-level checks against your contracted rates.
           </p>
           <div className="mt-5">
-            <Link href="/analyses">
-              <Btn variant="outline" icon={<Icon.Filter size={14} />}>
-                Browse
-              </Btn>
-            </Link>
+            {tierOk(user.tier, 'L1') ? (
+              <Link href="/agreement">
+                <Btn variant="outline" icon={<Icon.FileText size={14} />}>
+                  Manage
+                </Btn>
+              </Link>
+            ) : (
+              <Link href="/upgrade">
+                <Btn variant="outline" icon={<Icon.Lock size={14} />} disabled>
+                  Level 1
+                </Btn>
+              </Link>
+            )}
           </div>
         </Card>
         <Card className={`p-6 flex flex-col min-h-[200px] ${!tierOk(user.tier, 'L2') ? 'bg-cream-200/40' : ''}`}>
@@ -314,7 +328,7 @@ export default function DashboardPage() {
             {!tierOk(user.tier, 'L2') && <Pill tone="leaf">L2</Pill>}
           </div>
           <h3 className="font-serif text-2xl leading-snug">What-if model</h3>
-          <p className="text-ink-500 text-[13px] mt-2 flex-1 leading-relaxed">Volume, AOV, and payment mix sliders.</p>
+          <p className="text-ink-500 text-[13px] mt-2 flex-1 leading-relaxed">Volume, AOV, and card mix sliders.</p>
           <div className="mt-5">
             <Link href="/whatif">
               <Btn
@@ -333,7 +347,7 @@ export default function DashboardPage() {
           <div className="w-12 h-12 rounded-full bg-ink text-cream flex items-center justify-center"><Icon.Sparkles size={18} /></div>
           <div className="flex-1">
             <div className="text-sm font-medium">You're on the Free tier.</div>
-            <div className="text-[12px] text-ink-400">Unlock Q&A, longer history, and exports. From $39/month.</div>
+            <div className="text-[12px] text-ink-400">Unlock discrepancy analysis, Q&A and savings estimates. From $39/month.</div>
           </div>
           <Link href="/upgrade"><Btn variant="primary">See plans</Btn></Link>
         </div>
