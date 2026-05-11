@@ -1,7 +1,9 @@
 'use client';
 
 import { Card } from '@/components/UI';
+import { ReportSlugFooter } from '@/components/ReportSlugFooter';
 import { formatMoney } from '@/lib/currencyConversion';
+import { humanizeFieldKey } from '@/lib/utils';
 
 /** Parsed currency field: null if absent or non-numeric (0 is valid). */
 export function parsedBalanceAmount(v) {
@@ -20,7 +22,7 @@ export function hasCashFlowSummary(d) {
 }
 
 /** Bank / workbook reconciliation: opening & closing balance and net cash movement when extracted. */
-export function CashFlowSummaryCard({ data, currency, className = '' }) {
+export function CashFlowSummaryCard({ data, currency, className = '', slugId }) {
   if (!hasCashFlowSummary(data)) return null;
   const ob = parsedBalanceAmount(data.opening_balance);
   const cb = parsedBalanceAmount(data.closing_balance);
@@ -46,7 +48,7 @@ export function CashFlowSummaryCard({ data, currency, className = '' }) {
   };
 
   return (
-    <Card className={`p-5 min-w-0 border border-ink/8 bg-cream-100/40 ${className}`}>
+    <Card id={slugId || undefined} className={`p-5 min-w-0 border border-ink/8 bg-cream-100/40 scroll-mt-28 ${className}`}>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <div className="smallcaps text-ink-400">Cash position</div>
@@ -54,9 +56,9 @@ export function CashFlowSummaryCard({ data, currency, className = '' }) {
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-        {cell('Opening balance', ob)}
-        {cell('Net cash flow', netShow, { emphasize: false })}
-        {cell('Closing balance', cb, { emphasize: true })}
+        {cell(humanizeFieldKey('opening_balance'), ob)}
+        {cell(humanizeFieldKey('net_cash_flow'), netShow, { emphasize: false })}
+        {cell(humanizeFieldKey('closing_balance'), cb, { emphasize: true })}
       </div>
       {netDerived ? (
         <p className="text-[11px] text-ink-400 mt-4 leading-relaxed border-t border-ink/5 pt-3">
@@ -64,6 +66,7 @@ export function CashFlowSummaryCard({ data, currency, className = '' }) {
           explicit net cash line).
         </p>
       ) : null}
+      {slugId ? <ReportSlugFooter id={slugId} /> : null}
     </Card>
   );
 }

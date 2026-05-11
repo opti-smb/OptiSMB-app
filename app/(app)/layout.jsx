@@ -10,10 +10,8 @@ import { tierOk } from '@/lib/utils';
 const NAV = [
   { key: '/dashboard', label: 'Dashboard', icon: <Icon.LayoutDashboard /> },
   { key: '/upload', label: 'Upload statement', icon: <Icon.Upload /> },
-  { key: '/agreement', label: 'Merchant agreement', icon: <Icon.FileText />, tier: 'L1' },
   { key: '/analyses', label: 'Analyses', icon: <Icon.History /> },
   { key: '/report', label: 'Report', icon: <Icon.Receipt /> },
-  { key: '/benchmark', label: 'Benchmarking', icon: <Icon.BarChart /> },
   { key: '/whatif', label: 'What-if modelling', icon: <Icon.Bolt />, tier: 'L2' },
   { key: '/notifications', label: 'Notifications', icon: <Icon.Bell /> },
   { key: '/settings', label: 'Settings', icon: <Icon.Settings /> },
@@ -22,7 +20,7 @@ const NAV = [
 ];
 
 export default function AppLayout({ children }) {
-  const { isAuthenticated, user, statements, getCurrentStatement, unreadCount } = useApp();
+  const { isAuthenticated, user, statements, getCurrentStatement } = useApp();
   const [navOpen, setNavOpen] = useState(false);
   const [searchVal, setSearchVal] = useState('');
   const pathname = usePathname();
@@ -61,9 +59,6 @@ export default function AppLayout({ children }) {
                 className={`w-full flex items-center gap-3 px-3 h-9 rounded-lg text-[13px] transition ${active ? 'bg-ink text-cream' : 'text-ink-500 hover:bg-ink/5'}`}>
                 {icon && <span className="shrink-0">{icon}</span>}
                 <span className="flex-1 truncate">{label}</span>
-                {key === '/notifications' && unreadCount > 0 && (
-                  <span className="w-5 h-5 rounded-full bg-rose text-cream text-[10px] flex items-center justify-center">{unreadCount}</span>
-                )}
                 {tier === 'L2' && !active && <Pill tone="leaf" className="!text-[9px] !py-0">L2</Pill>}
                 {key === '/upgrade' && user.tier === 'Free' && !active && <Pill tone="teal" className="!text-[9px] !py-0">Upgrade</Pill>}
               </Link>
@@ -126,11 +121,12 @@ export default function AppLayout({ children }) {
               />
               <span className="font-mono text-[10px]">⌘K</span>
             </div>
-            <Link href="/notifications" className="relative w-9 h-9 rounded-full border hair flex items-center justify-center hover:bg-ink/5 transition">
+            <Link
+              href="/notifications"
+              className="w-9 h-9 rounded-full border hair flex items-center justify-center hover:bg-ink/5 transition shrink-0"
+              aria-label="Notifications"
+            >
               <Icon.Bell size={15} />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-rose text-cream text-[10px] flex items-center justify-center">{unreadCount}</span>
-              )}
             </Link>
             <div className="w-9 h-9 rounded-full bg-ink text-cream flex items-center justify-center text-[12px] font-medium">{user.initials || 'HR'}</div>
           </div>

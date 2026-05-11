@@ -1,4 +1,12 @@
 import { File } from 'node:buffer';
+import dns from 'node:dns';
+
+import { augmentParsedDataWithPosBatchesFromXlsxBuffer } from '@/lib/augmentPosBatchesFromXlsx';
+import { isTabularStatementFileName, normalizeStatementFileType } from '@/lib/utils';
+import { unwrapParserPayload } from '@/lib/parserPayload';
+
+/** Prefer IPv4 for `localhost` (avoids ::1 vs 127.0.0.1 mismatch on some Windows/Node setups). */
+dns.setDefaultResultOrder('ipv4first');
 
 export const runtime = 'nodejs';
 
@@ -6,8 +14,9 @@ export const runtime = 'nodejs';
 export const maxDuration = 120;
 
 /**
- * Uploads are parsed only by the Python FastAPI service (`python/app.py`).
+ * Uploads are parsed by the Python FastAPI service (`services/app.py`).
  * Extraction + fee/volume math run in `statement_engine.py` before the response is returned.
+ * No LLM: do not add model calls here; keep parsing in the parser service and validation in lib/.
  *
  * Set STATEMENT_PARSER_URL or default http://127.0.0.1:8000
  */
@@ -27,7 +36,12 @@ function parserUrlLooksLocalhost(base) {
 function parserUnreachableMessage(base, errDetail) {
   const tail = errDetail ? ` ${errDetail}` : '';
   if (parserUrlLooksLocalhost(base)) {
-    return `Python parser at ${base} is not reachable.${tail} For local dev: run npm run parser (or uvicorn on port 8000).`;
+    return (
+      `Python parser at ${base} is not reachable.${tail} ` +
+      'The FastAPI service must be running on port 8000 while Next.js is up. ' +
+      'Open a second terminal in the project root, run `npm run parser`, and leave it running ' +
+      '(or use one terminal: `npm run dev:full`).'
+    );
   }
   return `Cannot reach statement parser at ${base}.${tail} Set STATEMENT_PARSER_URL in Vercel (or your host) to the public HTTPS URL of the FastAPI service, and ensure it is running.`;
 }
@@ -121,9 +135,22 @@ export async function POST(request) {
     const py = await forwardToPythonParser(fileBuffer, uploadName, mimeType, currency);
 
     if (py.ok && py.body?.success && py.body?.data) {
+      let data = unwrapParserPayload(py.body.data);
+      data = {
+        ...data,
+        file_type: normalizeStatementFileType(py.body.file_type, uploadName, mimeType),
+      };
+      // Merge POS daily-batch rows from the same tabular file bytes so saved statements include them (Report has no access to the file later).
+      if (isTabularStatementFileName(uploadName)) {
+        try {
+          data = await augmentParsedDataWithPosBatchesFromXlsxBuffer(fileBuffer, data, uploadName);
+        } catch (e) {
+          console.error('POS batch tabular augment (server):', e);
+        }
+      }
       return Response.json({
         success: true,
-        data: py.body.data,
+        data,
         method: py.body.method || 'python',
         file_type: py.body.file_type,
         extraction_ratio: py.body.extraction_ratio,

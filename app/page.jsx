@@ -37,8 +37,9 @@ function HeroGraphic() {
         </div>
         <div className={`absolute right-5 bottom-5 transition-all duration-500 ${stage >= 3 ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'}`}>
           <div className="bg-ink text-cream rounded-xl px-4 py-3 shadow-pop">
-            <div className="smallcaps text-teal-bright">Potential saving</div>
-            <div className="font-serif text-3xl tabular">$23,000<span className="text-base text-cream/50">/yr</span></div>
+            <div className="smallcaps text-teal-bright">Statement summary</div>
+            <div className="font-serif text-3xl tabular">1.84%</div>
+            <div className="text-[11px] text-cream/60 mt-1 font-mono">effective rate</div>
           </div>
         </div>
       </div>
@@ -52,24 +53,24 @@ function PricingTable() {
     {
       tier: 'Free', price: '$0', per: 'forever', cta: 'Start free', features: [
         ['Single statement parse', true], ['Fee breakdown + confidence', true],
-        ['Full discrepancy report', false], ['Benchmarking savings', false],
-        ['Q&A assistant', false], ['What-if modelling', false], ['Bulk upload & exports', false],
+        ['Channel & payment mix views', true], ['Q&A assistant', false],
+        ['What-if modelling', false], ['Bulk upload & exports', false],
       ]
     },
     {
       tier: 'Level 1', price: annual ? '$390' : '$39', per: annual ? '/year · save 2 months' : '/month',
       badge: 'Most popular', cta: 'Start 14-day trial', features: [
         ['Unlimited statement parses', true], ['Fee breakdown + confidence', true],
-        ['Full discrepancy report', true], ['Benchmarking savings', true],
-        ['Q&A assistant', true], ['What-if modelling', false], ['Bulk upload & exports', false],
+        ['Channel & payment mix views', true], ['Q&A assistant', true],
+        ['What-if modelling', false], ['Bulk upload & exports', false],
       ]
     },
     {
       tier: 'Level 2', price: annual ? '$990' : '$99', per: annual ? '/year · save 2 months' : '/month',
       cta: 'Start 14-day trial', features: [
         ['Unlimited statement parses', true], ['Fee breakdown + confidence', true],
-        ['Full discrepancy report', true], ['Benchmarking savings', true],
-        ['Q&A assistant', true], ['What-if modelling (sliders)', true], ['Bulk upload, OCR & exports', true],
+        ['Channel & payment mix views', true], ['Q&A assistant', true],
+        ['What-if modelling (sliders)', true], ['Bulk upload, OCR & exports', true],
       ]
     },
   ];
@@ -114,7 +115,7 @@ function PricingTable() {
           ))}
         </div>
         <p className="text-[11px] text-ink-400 mt-6 max-w-3xl">
-          All prices exclude sales tax. OptiSMB may receive referral fees from acquirers you contact via our platform; disclosure appears beside every recommendation and does not affect ranking.
+          All prices exclude sales tax. OptiSMB may receive referral fees from acquirers you contact via our platform; disclosure appears wherever that applies.
         </p>
       </div>
     </section>
@@ -124,8 +125,8 @@ function PricingTable() {
 export default function MarketingPage() {
   const compareRows = [
     ['Time to first analysis', '60 seconds', '2–6 weeks', '1–3 weeks'],
-    ['Line-level discrepancy check', 'Automated', 'Manual, limited', 'Variable'],
-    ['Benchmarking data', 'Live US panel', 'Anecdotal', "Broker's preferred panel"],
+    ['Line-level fee extraction', 'Automated', 'Manual, limited', 'Variable'],
+    ['Structured channel split', 'Yes', 'Sometimes', 'Depends on scope'],
     ['Dual confidence disclosure', 'Yes', 'No', 'No'],
     ['Cost', 'From $39/mo', '$500–2,000 one-off', '% of savings (5–20%)'],
     ['Referral disclosure', 'Always shown', 'N/A', 'Rarely shown'],
@@ -164,7 +165,7 @@ export default function MarketingPage() {
               Stop overpaying<br />your <em className="text-teal">payment acquirer</em>.
             </h1>
             <p className="mt-6 text-[17px] text-ink-500 max-w-xl">
-              Upload your acquiring statement. We read the fine print, catch overcharges against your merchant agreement, and benchmark the rate you should be paying — in sixty seconds.
+              Upload your acquiring statement. We read the fine print, extract every fee line, and summarise volume, channels, and payment mix — in about sixty seconds.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link href="/register">
@@ -196,9 +197,9 @@ export default function MarketingPage() {
       <section id="how" className="max-w-[1200px] mx-auto px-6 py-24">
         <div className="grid md:grid-cols-3 gap-px bg-ink/10 border hair rounded-2xl overflow-hidden">
           {[
-            { icon: <Icon.Receipt size={18} />, t: 'Detect overcharges', d: 'Line-by-line reconciliation of your statement against your merchant agreement. We flag interchange pass-through errors, missing rebates, and scheme-fee drift.' },
-            { icon: <Icon.BarChart size={18} />, t: 'Benchmark rates', d: 'Your effective rate versus a live panel of US acquirers for your exact MCC, volume, and card mix — with dual confidence so you know what\'s solid.' },
-            { icon: <Icon.Sparkles size={18} />, t: 'See the saving', d: 'Projected annual saving across Stripe, Adyen, Clover and more. Model what-if scenarios with your own numbers, not a broker\'s pitch deck.' },
+            { icon: <Icon.Receipt size={18} />, t: 'See every fee line', d: 'Per-line fee categories and pass-throughs from your file — structured so you can trace amounts without rebuilding the spreadsheet yourself.' },
+            { icon: <Icon.BarChart size={18} />, t: 'Channel & mix clarity', d: 'Channel volumes, effective rate, and parsed mix tables with dual confidence so you know what is rock-solid versus estimated.' },
+            { icon: <Icon.Sparkles size={18} />, t: 'Plan with your numbers', d: 'Q&A on your parsed statement and what-if sliders on higher tiers — model scenarios with your own volumes, not a generic pitch deck.' },
           ].map((v, i) => (
             <div key={i} className="bg-cream p-8">
               <div className="w-10 h-10 rounded-lg bg-ink text-cream flex items-center justify-center mb-5">{v.icon}</div>
@@ -242,7 +243,7 @@ export default function MarketingPage() {
               <h2 className="font-serif text-5xl md:text-6xl leading-[0.95]">Drag in your<br />last statement.</h2>
             </div>
             <div>
-              <p className="text-cream/70 text-[15px] mb-6 max-w-md">We'll tell you what you're being charged, what you should be charged, and which acquirer would save you the most.</p>
+              <p className="text-cream/70 text-[15px] mb-6 max-w-md">We show what you are being charged, how it breaks down, and where to dig deeper on the full report — so you can decide next steps with your adviser.</p>
               <Link href="/register"><Btn variant="teal" size="lg" icon={<Icon.ArrowRight size={16} />}>Start free analysis</Btn></Link>
             </div>
           </div>

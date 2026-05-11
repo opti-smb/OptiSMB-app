@@ -11,11 +11,11 @@ const FAQS = [
   },
   {
     q: 'Why are parsing and rate confidence separate?',
-    a: "Because a perfectly parsed statement can still be compared to a weak benchmark. Merging the two would hide which half is uncertain. We never collapse them — both scores are always shown independently on every report and recommendation.",
+    a: "Because extraction quality and how 'typical' your fee pattern looks are different questions. Merging them would hide uncertainty. We never collapse them — both scores are shown independently on every report.",
   },
   {
     q: 'Is this financial advice?',
-    a: "No. OptiSMB produces analysis and benchmarks based on your data. All decisions remain with you, your accountant or your registered financial adviser. We are an informational tool — we do not execute acquirer switches on your behalf.",
+    a: "No. OptiSMB produces structured analysis from your statement data. All decisions remain with you, your accountant or your registered financial adviser. We are an informational tool — we do not execute acquirer switches on your behalf.",
   },
   {
     q: 'How is my data kept secure?',
@@ -23,19 +23,19 @@ const FAQS = [
   },
   {
     q: 'What formats can I upload?',
-    a: 'PDF, CSV, and XLSX files up to 50MB. Level 1 and above also support JPG and PNG uploads via OCR. Level 2 supports bulk upload of multiple files simultaneously. CSV files will be parsed using real AI extraction via Claude.',
+    a: 'PDF, CSV, and XLSX files up to 50MB. Level 1 and above also support JPG and PNG uploads via OCR. Level 2 supports bulk upload of multiple files simultaneously. Parsing runs in the OptiSMB statement engine (FastAPI service); supported formats return structured fee and volume data.',
   },
   {
     q: 'How does the referral fee model work?',
-    a: 'We may receive a fee from acquirers when you contact them through our platform. This is disclosed clearly on every recommendation. It has no effect on ranking — recommendations are sorted by projected annual saving for your specific profile, not by referral fee size.',
+    a: 'We may receive a fee from acquirers when you contact them through our platform. This is disclosed clearly wherever it applies. It does not change how we parse or present your own statement data.',
   },
   {
     q: 'What is the Q&A feature?',
-    a: 'The Q&A assistant lets you ask plain-language questions about your statement. It is powered by Claude (Anthropic) via OpenRouter, grounded strictly in your parsed statement data. It will not answer questions that cannot be answered from your data, and it cites every source field.',
+    a: 'The Q&A assistant answers plain-language questions using only your parsed statement fields — deterministic rules, no external model call. It focuses on volume, rates, fees, and channel split. For full detail, use the report tabs.',
   },
   {
     q: 'How accurate is statement parsing?',
-    a: 'We target ≥90% accuracy across all statement types. For major acquirers like Stripe, Adyen and Chase, accuracy exceeds 93% using template-based extraction. Scanned PDF or image uploads typically achieve 72–85% and receive an explicit confidence warning. All low-confidence fields are flagged — never silently dropped.',
+    a: 'We target ≥90% accuracy across common statement layouts. For large-processor templates, accuracy is typically highest. Scanned PDF or image uploads vary more and receive an explicit confidence warning. All low-confidence fields are flagged — never silently dropped.',
   },
 ];
 

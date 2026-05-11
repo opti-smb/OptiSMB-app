@@ -32,15 +32,15 @@ export default function WhatIfPage() {
   const [growth, setGrowth] = useState(8);
   const [scenarioName, setScenarioName] = useState('');
 
-  const amex = Math.max(0, 100 - debit - credit);
-  const effective = Math.max(0, (1.84 - (vol - 95) * 0.004 - (debit - 58) * 0.006 + (amex - 10) * 0.008)).toFixed(2);
+  const remainder = Math.max(0, 100 - debit - credit);
+  const effective = Math.max(0, (1.84 - (vol - 95) * 0.004 - (debit - 58) * 0.006 + (remainder - 10) * 0.008)).toFixed(2);
   const annualFees = (vol * 12 * parseFloat(effective) / 100 * 1000).toFixed(0);
 
-  const savings = {
-    Stripe: Math.max(0, Math.round(18400 + (vol - 95) * 180 - (aov - 48) * 60 + growth * 400)),
-    Adyen: Math.max(0, Math.round(14200 + (vol - 95) * 140 - (aov - 48) * 40 + growth * 310)),
-    Clover: Math.max(0, Math.round(9800 + (vol - 95) * 90 - (aov - 48) * 20 + growth * 180)),
-  };
+  const savingsRows = [
+    { id: 'model-option-a', amount: Math.max(0, Math.round(18400 + (vol - 95) * 180 - (aov - 48) * 60 + growth * 400)) },
+    { id: 'model-option-b', amount: Math.max(0, Math.round(14200 + (vol - 95) * 140 - (aov - 48) * 40 + growth * 310)) },
+    { id: 'model-option-c', amount: Math.max(0, Math.round(9800 + (vol - 95) * 90 - (aov - 48) * 20 + growth * 180)) },
+  ];
 
   const reset = () => { setVol(95); setAov(48); setDebit(58); setCredit(32); setGrowth(8); };
 
@@ -62,7 +62,7 @@ export default function WhatIfPage() {
         <div>
           <div className="smallcaps text-ink-400 mb-2">What-if modelling · Level 2</div>
           <h1 className="font-serif text-5xl leading-tight">Project what you'd pay, <em className="text-teal">at any scale.</em></h1>
-          <p className="text-ink-500 text-[14px] max-w-2xl mt-2">Move the sliders. The panel recalculates your projected effective rate and savings across the three recommended acquirers in real time.</p>
+          <p className="text-[14px] text-ink-500 max-w-2xl mt-2">Move the sliders. The panel recalculates your projected effective rate and illustrative deltas for generic model options in real time.</p>
         </div>
 
         <div className="grid md:grid-cols-12 gap-5">
@@ -75,11 +75,11 @@ export default function WhatIfPage() {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="smallcaps text-ink-400">Card mix</span>
-                  <span className="font-mono text-[12px] tabular">{debit}% · {credit}% · {amex}%</span>
+                  <span className="font-mono text-[12px] tabular">{debit}% · {credit}% · {remainder}%</span>
                 </div>
                 <Slider label="Debit %" value={debit} min={0} max={100} step={1} onChange={v => setDebit(Math.min(v, 100 - credit))} display={`${debit}% debit`} compact />
                 <Slider label="Credit %" value={credit} min={0} max={100} step={1} onChange={v => setCredit(Math.min(v, 100 - debit))} display={`${credit}% credit`} compact />
-                <div className="text-[11px] text-ink-400 mt-1">Amex fills remainder · {amex}%</div>
+                <div className="text-[11px] text-ink-400 mt-1">Other share (remainder) · {remainder}%</div>
               </div>
               <Slider label="YoY growth rate" value={growth} min={-20} max={50} step={1} onChange={setGrowth} display={`${growth}%`} />
             </div>
@@ -116,18 +116,18 @@ export default function WhatIfPage() {
             <Card>
               <div className="p-5 hair-b font-serif text-xl">Projected savings vs current</div>
               <div className="divide-hair">
-                {Object.entries(savings).map(([name, sav]) => (
-                  <div key={name} className="px-5 py-4 flex items-center justify-between">
+                {savingsRows.map(({ id, amount: sav }) => (
+                  <div key={id} className="px-5 py-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-cream-200 border hair flex items-center justify-center font-serif">{name[0]}</div>
+                      <div className="w-9 h-9 rounded-lg bg-cream-200 border hair flex items-center justify-center font-mono text-[11px] text-ink-500">{id.slice(-1)}</div>
                       <div>
-                        <div className="font-medium">{name}</div>
+                        <div className="font-medium font-mono text-[13px]">{id}</div>
                         <div className="text-[11px] text-ink-400">under this scenario</div>
                       </div>
                     </div>
                     <div className="text-right">
                       <div className="font-serif text-2xl tabular text-teal">${sav.toLocaleString()}<span className="text-[12px] text-ink-400">/yr</span></div>
-                      <div className="text-[11px] text-ink-400">vs Chase baseline</div>
+                      <div className="text-[11px] text-ink-400">vs model baseline</div>
                     </div>
                   </div>
                 ))}

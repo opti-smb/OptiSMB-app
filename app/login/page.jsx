@@ -71,7 +71,7 @@ export default function LoginPage() {
     if (!email) { addToast({ type: 'error', title: 'Email required' }); return; }
     setLoading(true);
     await new Promise(r => setTimeout(r, 600));
-    login({ email });
+    await login({ email });
     addToast({ type: 'success', title: 'Welcome back!', message: 'Redirecting to your dashboard.' });
     router.push('/dashboard');
   };

@@ -4,7 +4,7 @@ import { ToastProvider } from '@/components/Toast';
 
 export const metadata = {
   title: 'OptiSMB — Acquirer Statement Analysis',
-  description: 'Upload your acquiring statement. We read the fine print, catch overcharges, and benchmark the rate you should be paying.',
+  description: 'Upload your acquiring statement. We read the fine print, surface every fee line, and explain your effective rate and channel split.',
 };
 
 export default function RootLayout({ children }) {

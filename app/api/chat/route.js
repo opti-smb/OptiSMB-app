@@ -1,10 +1,13 @@
-import { getBenchmarkAnalysis } from '@/lib/computeBenchmarkAnalysis';
 import { getStatementDisplayCurrency } from '@/lib/currencyConversion';
+import { finalizeParsedForClient } from '@/lib/statementFinalize';
+import { reconcileTotalFeesCharged, overviewPrimarySalesVolumeGross, isSyntheticInterchangeSchemeProcessorFeeLine, listParsedFeeScalarEntries } from '@/lib/utils';
+import { effectiveRatePercentFromTotals } from '@/lib/financialAnalysisFormulas';
 
 export const runtime = 'nodejs';
 
 /**
- * Q&A: uses parsed statement + benchmark summary (deterministic).
+ * Q&A: deterministic answers from parsed statement fields only.
+ * No LLM — extend by adding keyword branches and pure helpers (see docs/DETERMINISTIC_PIPELINE.md).
  */
 export async function POST(request) {
   try {
@@ -12,10 +15,12 @@ export async function POST(request) {
     const messages = body.messages || [];
     const last = messages[messages.length - 1];
     const q = String(last?.content || '').toLowerCase();
-    const pd = body.statementContext?.parsedData;
-    const ba = getBenchmarkAnalysis(pd);
-    const sum = ba?.summary;
-    const bench = ba?.benchmark;
+    const rawPd = body.statementContext?.parsedData;
+    const pd =
+      rawPd && typeof rawPd === 'object' ? finalizeParsedForClient({ ...rawPd }) : null;
+    const gv = pd != null ? overviewPrimarySalesVolumeGross(pd) : NaN;
+    const { total: feeTotal } = reconcileTotalFeesCharged(pd || {});
+    const eff = effectiveRatePercentFromTotals(feeTotal, gv);
 
     const n = (x) => (x == null || Number.isNaN(Number(x)) ? '—' : Number(x).toLocaleString('en-US', { maximumFractionDigits: 2 }));
     const displayCcy = getStatementDisplayCurrency(pd);
@@ -28,26 +33,60 @@ export async function POST(request) {
       }
     };
 
-    if (sum && bench && /interchange|scheme|benchmark|volume|effective|fee|overpay|saving|difference|rate/.test(q)) {
+    if (pd && /interchange|scheme|volume|effective|fee|rate/.test(q)) {
       const parts = [];
+      const feeLineMentionsInterchange = () =>
+        Array.isArray(pd.fee_lines) &&
+        pd.fee_lines.some(
+          (row) =>
+            row &&
+            typeof row === 'object' &&
+            !isSyntheticInterchangeSchemeProcessorFeeLine(row) &&
+            /\binterchange\b/i.test(`${String(row.type ?? '')} ${String(row.label ?? '')}`),
+        );
+      const feeLineMentionsScheme = () =>
+        Array.isArray(pd.fee_lines) &&
+        pd.fee_lines.some(
+          (row) =>
+            row &&
+            typeof row === 'object' &&
+            !isSyntheticInterchangeSchemeProcessorFeeLine(row) &&
+            /\bscheme\b/i.test(`${String(row.type ?? '')} ${String(row.label ?? '')}`) &&
+            /\b(fee|fees|assessment|charge)\b/i.test(`${String(row.type ?? '')} ${String(row.label ?? '')}`),
+        );
       if (/volume/.test(q)) {
-        parts.push(`Total transaction volume (parsed): ${money(sum.total_gross_volume)}.`);
+        parts.push(`Total transaction volume (parsed): ${money(gv)}.`);
       }
       if (/effective|rate/.test(q)) {
-        parts.push(
-          `Your effective rate: ${sum.effective_rate_pct != null ? `${sum.effective_rate_pct}%` : '—'}; benchmark rate: ${bench.benchmark_rate_pct}%; gap ${bench.rate_gap_pp != null ? `${bench.rate_gap_pp >= 0 ? '+' : ''}${bench.rate_gap_pp}pp` : '—'}.`
-        );
+        parts.push(`Your effective rate: ${eff != null && Number.isFinite(eff) ? `${eff.toFixed(2)}%` : '—'} (fees ÷ gross volume where available).`);
       }
       if (/interchange/.test(q) && pd) {
-        parts.push(`Interchange fees (parsed): ${money(pd.interchange_fees)}.`);
+        const ic = Number(pd.interchange_fees);
+        if (Number.isFinite(ic) && Math.abs(ic) > 0.005) {
+          parts.push(`Interchange fees (parsed): ${money(pd.interchange_fees)}.`);
+        } else if (feeLineMentionsInterchange()) {
+          parts.push('Interchange appears on itemized fee lines in this parse — see the report Fee breakdown for those rows.');
+        } else {
+          parts.push('This parse does not include separate interchange totals or interchange-labeled fee lines.');
+        }
       }
       if (/scheme/.test(q) && pd) {
-        parts.push(`Scheme fees (parsed): ${money(pd.scheme_fees)}.`);
+        const sc = Number(pd.scheme_fees);
+        if (Number.isFinite(sc) && Math.abs(sc) > 0.005) {
+          parts.push(`Scheme fees (parsed): ${money(pd.scheme_fees)}.`);
+        } else if (feeLineMentionsScheme()) {
+          parts.push('Scheme or assessment fees appear on itemized fee lines in this parse — see the report Fee breakdown for those rows.');
+        } else {
+          parts.push('This parse does not include separate scheme-fee totals or scheme-labeled fee lines.');
+        }
       }
-      if (/benchmark|overpay|saving|difference/.test(q)) {
-        parts.push(
-          `Versus benchmark (${bench.benchmark_rate_pct}%): estimated fees at benchmark rate ${money(bench.fees_at_benchmark_rate)}; your fees ${money(sum.total_fees_charged)}; estimated overpayment ${money(bench.estimated_overpayment)}.`
-        );
+      if (/fee|total fee/.test(q) && pd) {
+        parts.push(`Total fees charged (parsed / reconciled): ${money(feeTotal)}.`);
+        const extras = listParsedFeeScalarEntries(pd);
+        if (extras.length > 0 && !/interchange|scheme/.test(q)) {
+          const lines = extras.slice(0, 12).map((e) => `${e.label} (${e.slug}): ${money(e.value)}.`);
+          parts.push(`Fee buckets on file: ${lines.join(' ')}`);
+        }
       }
       if (parts.length > 0) {
         return Response.json({
@@ -58,7 +97,7 @@ export async function POST(request) {
 
     return Response.json({
       content:
-        'Ask about volume, effective rate, fees, or benchmark comparison — answers use your parsed statement data when available. ' +
+        'Ask about volume, effective rate, or total fees — answers use your parsed statement data when available. ' +
         'For full detail open the Overview tab.',
     });
   } catch (err) {

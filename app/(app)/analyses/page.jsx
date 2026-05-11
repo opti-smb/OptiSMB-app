@@ -1,12 +1,131 @@
 'use client';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as Icon from '@/components/Icons';
-import { Card, Btn, Pill, ConfidenceBadge } from '@/components/UI';
+import { Card, Btn, Pill } from '@/components/UI';
 import { useApp } from '@/components/AppContext';
 import { useToast } from '@/components/Toast';
-import { tierOk, downloadCSV, triggerPrint } from '@/lib/utils';
+import {
+  tierOk,
+  downloadCSV,
+  triggerPrint,
+  channelSplitRowGrossForAggregate,
+  resolveChannelSplitBucket,
+  reconcileTotalFeesCharged,
+  overviewPrimarySalesVolumeGross,
+} from '@/lib/utils';
+import { finalizeParsedForClient } from '@/lib/statementFinalize';
+import { effectiveRatePercentFromTotals } from '@/lib/financialAnalysisFormulas';
+
+function statementBillingMonthKey(s) {
+  if (s?.billingMonthKey) return s.billingMonthKey;
+  const from = s?.parsedData?.billing_period?.from;
+  if (!from) return null;
+  const d = new Date(from);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function compareStatementsByBillingMonthAsc(a, b) {
+  const ka = statementBillingMonthKey(a) || '\xff';
+  const kb = statementBillingMonthKey(b) || '\xff';
+  return ka.localeCompare(kb);
+}
+
+function momMetricsFromStatement(s) {
+  const fin =
+    s?.parsedData && typeof s.parsedData === 'object' ? finalizeParsedForClient(s.parsedData) : null;
+  if (!fin) return { gv: null, fees: null, eff: null };
+  const gv = overviewPrimarySalesVolumeGross(fin);
+  const { total: fees } = reconcileTotalFeesCharged(fin);
+  let eff = effectiveRatePercentFromTotals(fees, gv);
+  if (eff == null && fin.effective_rate != null && Number.isFinite(Number(fin.effective_rate))) {
+    eff = Number(fin.effective_rate);
+  }
+  return { gv: Number(gv), fees: Number(fees), eff: eff != null ? Number(eff) : null };
+}
+
+function momPctDelta(prev, cur) {
+  if (prev == null || cur == null || !Number.isFinite(prev) || !Number.isFinite(cur) || prev === 0) return null;
+  return ((cur - prev) / prev) * 100;
+}
+
+function buildMonthOverMonthByAcquirer(statements, opts = {}) {
+  const acquirerFilter = opts.acquirer && opts.acquirer !== 'all' ? opts.acquirer : null;
+  const acquirers = [
+    ...new Set(
+      statements
+        .filter((s) => s && statementBillingMonthKey(s))
+        .map((s) => s.acquirer)
+        .filter(Boolean),
+    ),
+  ].filter((a) => !acquirerFilter || a === acquirerFilter);
+
+  return acquirers.map((acquirer) => {
+    const rows = statements
+      .filter((s) => s.acquirer === acquirer && statementBillingMonthKey(s))
+      .sort(compareStatementsByBillingMonthAsc);
+
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const s = rows[i];
+      const prev = i > 0 ? rows[i - 1] : null;
+      const m = momMetricsFromStatement(s);
+      const pm = prev ? momMetricsFromStatement(prev) : { gv: null, fees: null, eff: null };
+      out.push({
+        monthKey: statementBillingMonthKey(s),
+        periodLabel: s.period || statementBillingMonthKey(s),
+        volume: Number.isFinite(m.gv) ? m.gv : null,
+        fees: Number.isFinite(m.fees) ? m.fees : null,
+        effPct: m.eff != null && Number.isFinite(m.eff) ? m.eff : null,
+        dVol: prev ? momPctDelta(pm.gv, m.gv) : null,
+        dFees: prev ? momPctDelta(pm.fees, m.fees) : null,
+        dEff: prev && pm.eff != null && m.eff != null ? m.eff - pm.eff : null,
+      });
+    }
+    return { acquirer, rows: out };
+  });
+}
+
+function formatPctDelta(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(1)}%`;
+}
+
+function formatPpDelta(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)} pp`;
+}
+
+function displayChannelSplitVolume(parsedData, splitKey) {
+  const fin =
+    parsedData && typeof parsedData === 'object' ? finalizeParsedForClient(parsedData) : null;
+  const row = fin?.channel_split?.[splitKey];
+  if (!row || typeof row !== 'object') return '—';
+  const bucket = resolveChannelSplitBucket(splitKey, row);
+  const v =
+    bucket != null
+      ? channelSplitRowGrossForAggregate(fin, row, bucket)
+      : Number(row.volume);
+  return Number.isFinite(v) && v > 0 ? `$${Number(v).toLocaleString()}` : '—';
+}
+
+function displayEffectiveRatePct(parsedData) {
+  const fin =
+    parsedData && typeof parsedData === 'object' ? finalizeParsedForClient(parsedData) : null;
+  if (!fin) return '—';
+  let n = Number(fin.effective_rate);
+  const { total: feeTot } = reconcileTotalFeesCharged(fin);
+  const gv = overviewPrimarySalesVolumeGross(fin);
+  if (n === 0 || !Number.isFinite(n)) {
+    const alt = effectiveRatePercentFromTotals(feeTot, gv);
+    if (alt != null) n = alt;
+  }
+  return Number.isFinite(n) ? `${n.toFixed(2)}%` : '—';
+}
 
 function tierHistoryLabel(tier) {
   if (tier === 'L2') return 'Unlimited history';
@@ -27,7 +146,7 @@ function applyTierFilter(statements, tier) {
 }
 
 export default function AnalysesPage() {
-  const { user, statements, setCurrentStatementId, deleteStatement, checkStaleness } = useApp();
+  const { user, statements, setCurrentStatementId, deleteStatement } = useApp();
   const { addToast } = useToast();
   const router = useRouter();
   const [filter, setFilter] = useState('all');
@@ -45,6 +164,11 @@ export default function AnalysesPage() {
     return true;
   });
 
+  const monthOverMonth = useMemo(
+    () => buildMonthOverMonthByAcquirer(tierFiltered, { acquirer: acquirerFilter }),
+    [tierFiltered, acquirerFilter],
+  );
+
   const openReport = (id) => {
     setCurrentStatementId(id);
     router.push('/report');
@@ -52,15 +176,14 @@ export default function AnalysesPage() {
 
   const exportAll = () => {
     const rows = [
-      ['Date', 'Period', 'Acquirer', 'Effective Rate', 'Total Fees', 'POS Volume', 'Online Volume', 'Best Saving', 'Status', 'Parsing Confidence', 'Rate Confidence'],
+      ['Date', 'Period', 'Acquirer', 'Effective Rate', 'Total Fees', 'POS Volume', 'Online Volume', 'Status'],
       ...tierFiltered.map(s => [
         s.uploadDate, s.period, s.acquirer,
-        `${s.parsedData?.effective_rate?.toFixed(2) ?? '—'}%`,
+        displayEffectiveRatePct(s.parsedData),
         `$${s.parsedData?.total_fees_charged?.toLocaleString() ?? '—'}`,
-        `$${s.parsedData?.channel_split?.pos?.volume?.toLocaleString() ?? '—'}`,
-        `$${s.parsedData?.channel_split?.cnp?.volume?.toLocaleString() ?? '—'}`,
-        s.benchmarks?.[0] ? `$${s.benchmarks[0].save?.toLocaleString()}` : '—',
-        s.status, s.parsingConfidence, s.rateConfidence,
+        displayChannelSplitVolume(s.parsedData, 'pos'),
+        displayChannelSplitVolume(s.parsedData, 'cnp'),
+        s.status,
       ]),
     ];
     downloadCSV(rows, 'optismb-analyses.csv');
@@ -119,45 +242,32 @@ export default function AnalysesPage() {
           <Link href="/upload"><Btn variant="primary" icon={<Icon.Upload size={14} />}>Upload statement</Btn></Link>
         </Card>
       ) : (
+        <>
         <Card>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="smallcaps text-ink-400 bg-cream-200/40">
                 <tr>
-                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Fees', 'Best saving', 'Status', 'Confidence', 'Actions'].map(h => (
+                  {['Date', 'Period', 'Acquirer', 'Eff. rate', 'Fees', 'Status', 'Actions'].map(h => (
                     <th key={h} className="text-left font-medium px-5 py-3">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-hair">
-                {visible.map(s => {
-                  const staleness = checkStaleness(s);
-                  const bestSave = s.benchmarks?.[0]?.save;
-                  return (
+                {visible.map(s => (
                     <tr key={s.id} className="hover:bg-cream-200/40 group">
                       <td className="px-5 py-3 font-mono text-[13px] tabular">{s.uploadDate}</td>
                       <td className="px-5 py-3">{s.period}</td>
                       <td className="px-5 py-3 max-w-[160px]">
                         <div className="truncate">{s.acquirer}</div>
-                        {staleness && (
-                          <div className={`text-[11px] font-mono mt-0.5 ${staleness.level === 'red' ? 'text-rose' : 'text-amber'}`}>
-                            ⚠ benchmark data {staleness.daysOld}d old
-                          </div>
-                        )}
                       </td>
-                      <td className="px-5 py-3 font-mono tabular">{s.parsedData?.effective_rate?.toFixed(2) ?? '—'}%</td>
+                      <td className="px-5 py-3 font-mono tabular">{displayEffectiveRatePct(s.parsedData)}</td>
                       <td className="px-5 py-3 font-mono tabular">${(s.parsedData?.total_fees_charged || 0).toLocaleString()}</td>
-                      <td className="px-5 py-3 font-mono tabular">
-                        {tierOk(user.tier, 'L1') && bestSave
-                          ? <span className="text-teal">${bestSave.toLocaleString()}</span>
-                          : <span className="text-ink-300 flex items-center gap-1"><Icon.Lock size={11} />Upgrade</span>}
-                      </td>
                       <td className="px-5 py-3">
                         <Pill tone={s.status === 'Parsed' ? 'leaf' : 'amber'}>
                           <span className={`dot ${s.status === 'Parsed' ? 'bg-leaf' : 'bg-amber'}`} />{s.status}
                         </Pill>
                       </td>
-                      <td className="px-5 py-3"><ConfidenceBadge level={s.parsingConfidence} /></td>
                       <td className="px-5 py-3">
                         <div className="flex gap-3 text-[13px] opacity-60 group-hover:opacity-100 transition">
                           <button onClick={() => openReport(s.id)} className="underline underline-offset-2 flex items-center gap-1 text-ink">
@@ -170,7 +280,7 @@ export default function AnalysesPage() {
                             <button onClick={() => {
                               const rows = [
                                 ['Acquirer', 'Period', 'Rate', 'Fees', 'POS Volume', 'Online Volume'],
-                                [s.acquirer, s.period, `${s.parsedData?.effective_rate?.toFixed(2)}%`, `$${s.parsedData?.total_fees_charged?.toLocaleString()}`, `$${s.parsedData?.channel_split?.pos?.volume?.toLocaleString()}`, `$${s.parsedData?.channel_split?.cnp?.volume?.toLocaleString()}`]
+                                [s.acquirer, s.period, `${s.parsedData?.effective_rate?.toFixed(2)}%`, `$${s.parsedData?.total_fees_charged?.toLocaleString()}`, displayChannelSplitVolume(s.parsedData, 'pos'), displayChannelSplitVolume(s.parsedData, 'cnp')]
                               ];
                               downloadCSV(rows, `${s.acquirer.replace(/\s+/g, '-')}-${s.period}.csv`);
                               addToast({ type: 'success', title: 'Excel downloaded' });
@@ -180,8 +290,7 @@ export default function AnalysesPage() {
                         </div>
                       </td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
@@ -201,6 +310,59 @@ export default function AnalysesPage() {
             <div className="p-8 text-center text-ink-400 text-[14px]">No statements match your filters.</div>
           )}
         </Card>
+
+        {monthOverMonth.some((b) => b.rows.length >= 2) && (
+          <div className="space-y-4">
+            <div className="smallcaps text-ink-400">Month over month</div>
+            <p className="text-[13px] text-ink-500 max-w-3xl">
+              Compare gross volume, total fees, and effective rate across billing periods (same acquirer). Upload each
+              month&apos;s statement so periods appear in order.
+            </p>
+            {monthOverMonth.map(
+              ({ acquirer, rows }) =>
+                rows.length >= 2 && (
+                  <Card key={acquirer} className="overflow-hidden">
+                    <div className="px-5 py-4 hair-b bg-cream-200/40 font-medium">{acquirer}</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="smallcaps text-ink-400 bg-cream-200/30">
+                          <tr>
+                            {['Billing month', 'Gross volume', 'Total fees', 'Eff. rate', 'Δ Volume', 'Δ Fees', 'Δ Rate'].map(
+                              (h) => (
+                                <th key={h} className="text-left font-medium px-5 py-3 whitespace-nowrap">
+                                  {h}
+                                </th>
+                              ),
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-hair">
+                          {rows.map((r, i) => (
+                            <tr key={`${acquirer}-${r.monthKey}-${i}`} className="hover:bg-cream-200/35">
+                              <td className="px-5 py-3 font-mono text-[13px]">{r.periodLabel}</td>
+                              <td className="px-5 py-3 font-mono tabular">
+                                {r.volume != null ? `$${r.volume.toLocaleString()}` : '—'}
+                              </td>
+                              <td className="px-5 py-3 font-mono tabular">
+                                {r.fees != null ? `$${r.fees.toLocaleString()}` : '—'}
+                              </td>
+                              <td className="px-5 py-3 font-mono tabular">
+                                {r.effPct != null ? `${r.effPct.toFixed(2)}%` : '—'}
+                              </td>
+                              <td className="px-5 py-3 font-mono tabular text-[13px]">{formatPctDelta(r.dVol)}</td>
+                              <td className="px-5 py-3 font-mono tabular text-[13px]">{formatPctDelta(r.dFees)}</td>
+                              <td className="px-5 py-3 font-mono tabular text-[13px]">{formatPpDelta(r.dEff)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                ),
+            )}
+          </div>
+        )}
+        </>
       )}
 
       {/* Delete confirmation modal */}
