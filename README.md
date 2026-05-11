@@ -1,12 +1,12 @@
 # OptiSMB — Acquirer Statement Analysis Portal
 
-> **AI-powered payment acquiring analysis for US small businesses.**  
-> Upload your acquiring statement. We read the fine print, catch overcharges, and benchmark the rate you should be paying — in sixty seconds.
+> **Code-first payment acquiring analysis for US small businesses.**  
+> Upload your acquiring statement. Parsing, validation, roll-ups, reconciliations, and UI narratives run in **deterministic services and libraries**—no LLM in the core pipeline.
 
 [![Next.js](https://img.shields.io/badge/Next.js-16.2-black?logo=next.js)](https://nextjs.org)
 [![React](https://img.shields.io/badge/React-19.2-61DAFB?logo=react)](https://react.dev)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38BDF8?logo=tailwindcss)](https://tailwindcss.com)
-[![Claude](https://img.shields.io/badge/AI-Claude%20via%20OpenRouter-orange)](https://openrouter.ai)
+[![Parser](https://img.shields.io/badge/parser-FastAPI%20%28Python%29-009688)](https://github.com/opti-smb/services)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
@@ -23,7 +23,7 @@
 - [Environment Variables](#environment-variables)
 - [Application Pages & Routes](#application-pages--routes)
 - [Tier Model (Free / Level 1 / Level 2)](#tier-model)
-- [AI Integration](#ai-integration)
+- [Parsing and Q&A (no LLM)](#parsing-and-qa-no-llm)
 - [Dual Confidence Model](#dual-confidence-model)
 - [Data Source Tiers](#data-source-tiers)
 - [Acquirer Database](#acquirer-database)
@@ -40,14 +40,14 @@
 
 ## Overview
 
-OptiSMB is a fully automated, AI-powered web platform that enables Small and Medium-sized Businesses to:
+OptiSMB is a fully automated web platform that enables Small and Medium-sized Businesses to:
 
 1. **Upload** their payment acquiring statements (PDF, CSV, XLSX)
-2. **Parse** every fee line automatically using Claude AI with per-field confidence scoring
+2. **Parse** fee lines and totals via the **Python FastAPI** parser (rules + extraction engine), with optional per-field confidence in the schema
 3. **Cross-reference** against their merchant agreement to detect overcharges and missing rebates
 4. **Benchmark** their effective rate against a database of 10 US acquirers
 5. **Model** what-if scenarios (volume, card mix, growth) to project future savings
-6. **Ask questions** about their statement in plain English via a grounded AI Q&A assistant
+6. **Ask questions** from a **rule-based Q&A** path over parsed JSON (no live model call)
 
 **Target saving: 10–30% of annual payment acquiring costs.**
 
@@ -70,7 +70,7 @@ The app runs locally on **http://localhost:3001**
 ## Key Features
 
 ### Core Analysis
-- **Automated statement parsing** — AI extracts every fee line in under 60 seconds (P95). CSV files use real LLM extraction; binary formats fall back to demo data with clear notice.
+- **Automated statement parsing** — The FastAPI `services` parser extracts the canonical JSON; Next.js `/api/parse` forwards uploads and applies JS-side augments (e.g. tabular batch harvest). If the parser is unreachable, the UI shows a clear error (no silent LLM fallback).
 - **Per-field confidence scoring** — Every extracted field carries a High / Medium / Low confidence badge. Fields below Low confidence are flagged, never silently dropped.
 - **Fee breakdown table** — All fee lines with type, rate, amount, card type, channel, and confidence. Filterable by channel (POS / Online) or flagged status.
 - **Channel split analysis** — Dedicated tab showing POS (card present) vs CNP (card not present) volume, fees, effective rates, transaction counts, average transaction values, and full card mix breakdown.
@@ -99,17 +99,15 @@ The app runs locally on **http://localhost:3001**
 - **Scenario save/load/delete** — Named scenarios persisted to localStorage.
 
 ### Q&A Assistant (Level 1+)
-- **Grounded entirely in statement data** — Claude is instructed to answer only from the structured parsed statement JSON. Hallucination pathway explicitly closed.
-- **Source citation** — Every answer cites the source data field(s) it was derived from (e.g., `parsedData.scheme_fees`).
-- **Out-of-scope decline** — Questions that cannot be answered from the uploaded data are explicitly declined with an explanation.
+- **Grounded entirely in statement data** — `POST /api/chat` uses **deterministic rules** (keyword routing + fields from `parsedData` only). No external LLM.
+- **Narrow scope by design** — Volume, effective rate, and common fee fields when present; otherwise a short pointer to the report tabs.
 - **Suggestion chips** — Pre-built question prompts for common queries.
 - **Q&A export** — Download the full conversation as CSV.
-- **Powered by Claude via OpenRouter** — Model: `anthropic/claude-3-haiku` (configurable).
 
 ### Notifications & Alerts
 - **In-app notification centre** — Parse complete, report ready, discrepancy detected, staleness alerts, agreement uploaded.
 - **Email simulation** — All email notifications are simulated in demo mode with visual indicator. Production-ready to connect Resend or SendGrid.
-- **Staleness banner** — Prominent alert on dashboard, report, and benchmark pages when data is ≥90 days old.
+- **Staleness banner** — Prominent alert on dashboard and report when data is ≥90 days old.
 - **Human review queue banner** — Shows on dashboard when a low-confidence statement has been routed for human review.
 
 ### Dashboard
@@ -117,7 +115,7 @@ The app runs locally on **http://localhost:3001**
 - **Onboarding banner** — Shown to first-time users with guided upload CTA and step-by-step explainer.
 - **Dual confidence explainer** — Card explaining the difference between parsing confidence and rate data confidence.
 - **Recent analyses table** — Last 5 statements with click-through to report.
-- **Quick action cards** — Upload, Merchant Agreement, What-If Modelling.
+- **Quick action cards** — Upload, analyses library, and What-if modelling (L2).
 
 ### Account & Settings
 - **Profile** — Business name, email, industry, country.
@@ -140,11 +138,11 @@ The app runs locally on **http://localhost:3001**
 | **UI Library** | React 19.2.5 |
 | **Styling** | Tailwind CSS 3.4.17 with custom design tokens |
 | **Fonts** | Bowlby One SC, Instrument Serif, Inter, JetBrains Mono (Google Fonts) |
-| **AI / LLM** | Anthropic Claude 3 Haiku via OpenRouter API |
+| **Parsing** | Python FastAPI companion service; no LLM in the default pipeline ([`docs/DETERMINISTIC_PIPELINE.md`](docs/DETERMINISTIC_PIPELINE.md)) |
 | **State** | React Context + localStorage persistence |
-| **Charts** | Custom SVG (DonutChart, HBar, Sparkline, LineChart) |
+| **Charts** | Custom SVG (DonutChart, HBar, Sparkline) |
 | **Icons** | Custom SVG icon library |
-| **API** | Next.js API Routes (Edge-compatible) |
+| **API** | Next.js API Routes; `/api/parse` proxies to FastAPI ([opti-smb/services](https://github.com/opti-smb/services)) |
 | **Language** | JavaScript (JSX) — no TypeScript |
 | **Build** | Turbopack (Next.js default) |
 
@@ -159,31 +157,29 @@ The app runs locally on **http://localhost:3001**
 │                                                              │
 │  AppContext (localStorage) ──── Toast System                 │
 │       │                                                      │
-│  Pages: dashboard, upload, report, benchmark, whatif,        │
-│         agreement, analyses, notifications, settings,        │
-│         upgrade, help, login, register                       │
+│  Pages: dashboard, upload, report, whatif, analyses,         │
+│         notifications, settings, upgrade, help, login,       │
+│         register                                             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ fetch
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Next.js API Routes (Server-side)               │
 │                                                             │
-│  /api/parse  ──────────────── /api/chat                     │
-│  (statement parsing)          (Q&A assistant)               │
-│       │                             │                        │
-│       └─────────────┬───────────────┘                        │
-│                     ▼                                        │
-│              OpenRouter API                                  │
-│         (anthropic/claude-3-haiku)                          │
-│         API key secured server-side                         │
+│  POST /api/parse  ──►  FastAPI POST /parse                 │
+│  (multipart forward)      (opti-smb/services, Python)       │
+│                                                             │
+│  POST /api/chat  ──►  Grounded answers from parsed data     │
+│                      (deterministic; no external LLM call)   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **Key architectural decisions:**
-- **No real backend** — All state is managed in React Context with localStorage persistence. Production would add PostgreSQL + S3.
-- **API key security** — OpenRouter key is stored in `.env.local` and only accessed from Next.js API routes (server-side). Never exposed to the client.
-- **Simulated services** — Auth (Auth0 pattern), email (Resend/SendGrid pattern), and OCR (AWS Textract pattern) are simulated with toast notifications. Drop-in ready for real integration.
-- **Binary file fallback** — PDFs and XLSX files cannot be text-extracted in this release without a server-side OCR library. They fall back to demo data with a clear user notice. CSV files are fully parsed by the LLM.
+- **Parser service** — Real statement extraction runs in the **FastAPI** repo cloned at `services/` (default `http://127.0.0.1:8000`). Next.js `/api/parse` forwards uploads server-side. Use `npm run dev:full` to run both processes locally.
+- **No database in this repo** — App state is React Context + localStorage. Production would add PostgreSQL + object storage for files.
+- **Secrets** — Parser URL (`STATEMENT_PARSER_URL`) and any third-party keys stay server-side in `.env.local`. Never expose them in the client bundle.
+- **Simulated integrations** — Auth (Auth0 pattern), email (Resend/SendGrid pattern), and OCR (AWS Textract pattern) are simulated with toast notifications. Drop-in ready for real integration.
+- **Run the parser** — With the Python service running, CSV/XLSX/PDF flows use `statement_engine.py`. If the parser is unreachable, the UI surfaces a clear error (see `app/api/parse/route.js`).
 
 ---
 
@@ -206,10 +202,8 @@ SMB-App/
 │   │   ├── layout.jsx            # Sidebar nav + topbar + mobile hamburger
 │   │   ├── dashboard/page.jsx    # Main dashboard with KPIs and recent analyses
 │   │   ├── upload/page.jsx       # Statement upload (drag-drop, parsing animation)
-│   │   ├── agreement/page.jsx    # Merchant agreement management (version control)
 │   │   ├── report/page.jsx       # Full analysis report (6 tabs)
 │   │   ├── analyses/page.jsx     # All statements with tier-gated history
-│   │   ├── benchmark/page.jsx    # Standalone benchmarking + acquirer database
 │   │   ├── whatif/page.jsx       # What-if scenario modelling (Level 2)
 │   │   ├── notifications/page.jsx# Notification centre with email simulation
 │   │   ├── settings/page.jsx     # Account, subscription, privacy, security
@@ -217,8 +211,8 @@ SMB-App/
 │   │   └── help/page.jsx         # FAQ accordion + contact form
 │   │
 │   └── api/
-│       ├── parse/route.js        # POST — statement parsing via Claude
-│       └── chat/route.js         # POST — grounded Q&A via Claude
+│       ├── parse/route.js        # POST — forwards upload to FastAPI (`services/`)
+│       └── chat/route.js         # POST — grounded Q&A from parsed statement data
 │
 ├── components/
 │   ├── AppContext.jsx             # Global state (user, statements, agreements, notifications)
@@ -231,6 +225,7 @@ SMB-App/
 │   ├── mockData.js               # Demo statements, acquirer database, notifications
 │   └── utils.js                  # tierOk(), downloadCSV(), triggerPrint(), etc.
 │
+├── services/                     # (gitignored) opti-smb/services — FastAPI parser; `npm start` here (root `npm run parser` uses --prefix)
 ├── .env.local                    # Secret keys (never committed)
 ├── .gitignore                    # Excludes node_modules, .next, .env.local
 ├── jsconfig.json                 # Path alias: @/ → project root
@@ -248,7 +243,8 @@ SMB-App/
 
 - **Node.js** 18.17+ (Node 20 recommended)
 - **npm** 9+
-- An **OpenRouter API key** — sign up free at [openrouter.ai](https://openrouter.ai)
+- **Python** 3.10+ with `pip` — for the statement parser (`services/`)
+- Clone **[opti-smb/services](https://github.com/opti-smb/services)** into `services/` next to this repo (or `git clone https://github.com/opti-smb/services.git services` from the project root)
 
 ### Installation
 
@@ -257,18 +253,39 @@ SMB-App/
 git clone https://github.com/opti-smb/OptiSMB-app.git
 cd OptiSMB-app
 
-# 2. Install dependencies
+# 2. Clone the FastAPI parser (sibling folder `services/`)
+git clone https://github.com/opti-smb/services.git services
+
+# 3. Install Node dependencies
 npm install
 
-# 3. Create environment file
-cp .env.example .env.local
-# Then add your OpenRouter API key (see Environment Variables below)
+# 4. Install Python dependencies for the parser
+pip install -r services/requirements.txt
 
-# 4. Start the development server
+# 5. Environment file (optional for local parser URL; defaults to http://127.0.0.1:8000)
+cp .env.example .env.local
+```
+
+### Run the full stack (UI + parser)
+
+```bash
+npm run dev:full
+```
+
+- **Web app:** [http://localhost:3001](http://localhost:3001)
+- **Parser API:** [http://127.0.0.1:8000](http://127.0.0.1:8000) (`GET /health`, `POST /parse`)
+
+To run only the Next.js app (uploads will fail until the parser is up):
+
+```bash
 npm run dev
 ```
 
-The app will be available at **http://localhost:3001**
+To run only the parser:
+
+```bash
+npm run parser
+```
 
 ### Build for Production
 
@@ -281,14 +298,12 @@ npm start          # serves on port 3001
 
 ## Environment Variables
 
-Create a `.env.local` file in the project root:
+Create a `.env.local` file in the project root (optional for local dev; required values depend on your setup):
 
 ```env
-# Required — OpenRouter API key for AI parsing and Q&A
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
+# Optional — parser base URL (defaults to http://127.0.0.1:8000 when unset)
+# STATEMENT_PARSER_URL=http://127.0.0.1:8000
 ```
-
-> **Security:** This key is only accessed from Next.js server-side API routes (`/api/parse`, `/api/chat`). It is never sent to the browser.
 
 ### Optional future integrations (not required for demo)
 
@@ -327,11 +342,9 @@ AWS_REGION=us-east-1
 | Route | Tier | Description |
 |---|---|---|
 | `/dashboard` | All | KPIs, recent analyses, onboarding banner, staleness alerts, quick actions |
-| `/upload` | All | Drag-and-drop upload, 6-stage parsing animation, duplicate detection, agreement prompt |
-| `/agreement` | L1+ | Merchant agreement upload, version history, active terms display |
-| `/report` | All | 6-tab analysis report (see Report Tabs below) |
+| `/upload` | All | Drag-and-drop upload, multi-stage parsing animation, duplicate detection |
+| `/report` | All | Five-tab analysis report (see Report Tabs below) |
 | `/analyses` | All | All uploaded statements, tier-gated history, filter, export CSV |
-| `/benchmark` | All | Top 3 recommendations, acquirer database, trend chart |
 | `/whatif` | L2 | Slider-based scenario modelling, save/load scenarios |
 | `/notifications` | All | Notification centre, staleness alerts, email simulation indicator |
 | `/settings` | All | Profile, subscription, currency, notifications, data export, security |
@@ -345,9 +358,8 @@ AWS_REGION=us-east-1
 | Overview | All | Total fees KPIs, channel split bar chart, fee composition donut |
 | Fee Breakdown | All | All fee lines with filtering by channel / flagged. Per-field confidence. |
 | Channel Split | All | POS vs CNP deep dive — volume, fees, effective rate, txn count, avg txn, card mix |
-| Discrepancy Report | L1+ | Agreed vs charged table, overcharge and missing rebate detection |
-| Benchmarking | All | Top 3 acquirers with T1/T2/T3 badges, savings (L1+), referral disclosure |
-| Q&A | L1+ | Grounded AI chat with source citation and out-of-scope decline |
+| Discrepancy report | L1+ | Reconciliation layout, channel revenue table, bank tie-out, POS and e‑commerce fee spotlights, plain summary |
+| Q&A | L1+ | Rule-based answers from parsed fields (deterministic; extend in code) |
 
 ---
 
@@ -365,9 +377,8 @@ AWS_REGION=us-east-1
 | Channel split (POS vs CNP) | ✓ | ✓ | ✓ |
 | Acquirer benchmarking — top 3 | ✓ | ✓ | ✓ |
 | Estimated annual savings | — | ✓ | ✓ |
-| Merchant agreement upload | — | ✓ | ✓ |
 | Discrepancy report | — | ✓ | ✓ |
-| Q&A assistant (AI chat) | — | ✓ | ✓ |
+| Q&A assistant (rule-based) | — | ✓ | ✓ |
 | Email & in-app notifications | — | ✓ | ✓ |
 | What-if scenario modelling | — | — | ✓ |
 | Multi-currency support | — | — | ✓ |
@@ -391,22 +402,23 @@ The `<TierGate>` component wraps any feature that requires a higher tier — it 
 
 ---
 
-## AI Integration
+## Parsing and Q&A (no LLM)
+
+Product rule: **parsing, validation, mapping, math, display, and suggestions are implemented in code** (Python parser + JavaScript `lib/`). See [`docs/DETERMINISTIC_PIPELINE.md`](docs/DETERMINISTIC_PIPELINE.md).
 
 ### Statement Parsing (`/api/parse`)
 
 **Endpoint:** `POST /api/parse`  
-**Body:** `FormData` with `file`, `fileName`, `fileType`
+**Body:** `FormData` with `file`, `fileName`, `currency` (optional)
 
 **Flow:**
-1. File arrives at the API route (server-side)
-2. If the file is text-extractable (CSV, text-based), the content is read and sent to Claude
-3. Claude is prompted to extract the canonical schema (see below) and return structured JSON
-4. Markdown code fences are stripped from the response
-5. If the file is binary (PDF, XLSX) or parsing fails, returns `{ success: false, reason: 'binary_format' }`
-6. Client falls back to demo data with a user-visible notice
+1. File arrives at the Next.js API route (server-side).
+2. The route forwards multipart data to **FastAPI** `POST /parse` on `STATEMENT_PARSER_URL` (default `http://127.0.0.1:8000`).
+3. Python `statement_engine.py` returns structured JSON matching the canonical schema below.
+4. For tabular workbooks, Node may augment `parsedData` (e.g. POS batch rows from the same XLSX buffer).
+5. Response includes `parser: 'fastapi'` and `method` from the parser (`python` / engine-specific).
 
-**Canonical schema extracted:**
+**Canonical schema (excerpt):**
 
 ```json
 {
@@ -440,19 +452,17 @@ The `<TierGate>` component wraps any feature that requires a higher tier — it 
 }
 ```
 
-### Q&A Assistant (`/api/chat`)
+### Q&A (`/api/chat`)
 
 **Endpoint:** `POST /api/chat`  
 **Body:** `{ messages: [...], statementContext: {...} }`
 
-**System prompt behaviour:**
-- The structured statement JSON is injected as context into every request
-- Claude is instructed to answer **only** from the provided data
-- Every answer must cite the source field(s) using `[Source: fieldName]` syntax
-- Out-of-scope questions receive an explicit decline: *"This question cannot be answered from your uploaded statement data."*
-- No general financial advice pathway exists
+**Behaviour:**
+- Reads the last user message and matches **simple keyword patterns** (fees, volume, effective rate, interchange, scheme).
+- Builds the reply from **numeric fields** on `statementContext.parsedData` after `finalizeParsedForClient`.
+- No system prompt to an LLM; extend behaviour by editing `app/api/chat/route.js` (or extracting small pure helpers into `lib/`).
 
-**Model:** `anthropic/claude-3-haiku` (fast, cost-effective, accurate for structured data Q&A)
+**Model:** none (deterministic).
 
 ---
 
@@ -491,7 +501,7 @@ Every acquirer recommendation displays its data source tier:
 | **T5** | Acquirer commercial partnership (voluntary) | High | Does not influence ranking algorithm |
 
 **Staleness thresholds:**
-- **Amber (≥90 days):** Warning shown on dashboard, report, and benchmark pages
+- **Amber (≥90 days):** Warning shown on dashboard and report
 - **Red (≥180 days):** Strong warning; recommendations labelled as potentially misleading
 
 ---
@@ -519,49 +529,35 @@ Every acquirer recommendation displays its data source tier:
 
 ### `POST /api/parse`
 
-Parses an uploaded statement file using Claude AI.
+Forwards the upload to the **FastAPI** parser and returns JSON `data` on success. See `app/api/parse/route.js`.
 
 **Request:** `multipart/form-data`
 | Field | Type | Description |
 |---|---|---|
 | `file` | File | The statement file |
 | `fileName` | string | Original filename |
-| `fileType` | string | MIME type |
+| `currency` | string | Optional (e.g. `USD`, `AUTO`) |
 
-**Response:**
+**Response (success):**
 ```json
 {
   "success": true,
-  "data": { ...canonicalSchema },
-  "method": "llm"
+  "data": { "...canonicalSchema" },
+  "method": "python",
+  "parser": "fastapi"
 }
 ```
-Or on binary/failure:
-```json
-{
-  "success": false,
-  "reason": "binary_format"
-}
-```
-
----
 
 ### `POST /api/chat`
 
-Answers a question about a statement using Claude AI.
+Deterministic Q&A over `statementContext.parsedData`. See `app/api/chat/route.js`.
 
-**Request body:**
+**Request body (example):**
 ```json
 {
-  "messages": [
-    { "role": "user", "content": "What is my effective rate?" }
-  ],
+  "messages": [{ "role": "user", "content": "What is my effective rate?" }],
   "statementContext": {
-    "acquirer": "Chase Merchant Services",
-    "period": "Mar 2026",
-    "parsedData": { ...canonicalSchema },
-    "discrepancies": [...],
-    "benchmarks": [...]
+    "parsedData": { "...canonicalSchema" }
   }
 }
 ```
@@ -569,7 +565,7 @@ Answers a question about a statement using Claude AI.
 **Response:**
 ```json
 {
-  "content": "Your effective rate for Mar 2026 is 1.84%. [Source: parsedData.effective_rate]"
+  "content": "Your effective rate: 1.84% (fees ÷ gross volume where available)."
 }
 ```
 
@@ -626,7 +622,6 @@ Custom SVG chart components (no external chart library):
 | `DonutChart` | Segmented ring with centre label |
 | `HBar` | Horizontal bar chart |
 | `Sparkline` | Miniature area + line chart for KPI cards |
-| `LineChart` | Multi-series line chart with axes, gridlines, and dashed series support |
 
 ### `Icons.jsx`
 40+ SVG icons as named exports. All share a consistent 24×24 viewBox and `1.6px` stroke weight.
@@ -674,7 +669,7 @@ useEffect(() => {
 
 | Concern | Implementation |
 |---|---|
-| **API key exposure** | `OPENROUTER_API_KEY` only read server-side in API routes. Never in client bundles. |
+| **API key exposure** | Parser URL (`STATEMENT_PARSER_URL`) and other secrets only on the server. Never in client bundles. |
 | **File upload safety** | Max 50MB enforced client-side. Allowed extensions validated before processing. |
 | **No PII in logs** | `console.log` only used for email simulation trace — no user data logged. |
 | **Data isolation** | All data is per-account in localStorage. Production would enforce strict API-level account isolation. |
@@ -707,10 +702,10 @@ This codebase implements **Functional Specification Document v3.0** covering:
 |---|---|
 | FR-01: Account Registration & Login | ✓ Implemented (simulated Auth0) |
 | FR-02: Statement Upload (PDF/CSV/XLSX, 50MB limit, duplicate detection) | ✓ Implemented |
-| FR-03: Merchant Agreement Upload (version control, L1+) | ✓ Implemented |
+| FR-03: Merchant Agreement Upload (version control, L1+) | Deferred — no `/agreement` route in this shell; agreement flows may ship separately |
 | FR-04: Automated Statement Parsing (confidence scoring, human review queue) | ✓ Implemented |
-| FR-05: Agreement vs Statement Discrepancy Analysis (L1+) | ✓ Implemented |
-| FR-06: Acquirer Benchmarking & Recommendations (T1/T2/T3 tiers, referral disclosure) | ✓ Implemented |
+| FR-05: Agreement vs Statement Discrepancy Analysis (L1+) | Partial — discrepancy / reconciliation on Report tab; dedicated agreement compare UX tied to FR-03 |
+| FR-06: Acquirer Benchmarking & Recommendations (T1/T2/T3 tiers, referral disclosure) | Partial — benchmarking context in analyses/upload payloads; standalone `/benchmark` page removed |
 | FR-07: What-If Scenario Modelling (L2) | ✓ Implemented |
 | FR-08: Dashboard & Historical View (tier-gated history) | ✓ Implemented |
 | FR-09: Conversational Q&A (grounded, source-cited, out-of-scope decline) | ✓ Implemented |
@@ -727,7 +722,7 @@ This codebase implements **Functional Specification Document v3.0** covering:
 
 ### Phase 1 (Current — Demo)
 - [x] Complete frontend with all PRD features
-- [x] Real AI parsing and Q&A via OpenRouter Claude
+- [x] Parser-backed upload pipeline (FastAPI) + deterministic Q&A route
 - [x] Simulated auth, email, OCR
 - [x] 10-acquirer US database
 - [x] Dual confidence model
@@ -776,5 +771,5 @@ MIT © 2026 OptiSMB Inc., New York
 
 <div align="center">
   <strong>OptiSMB</strong> · Acquirer audit made simple<br/>
-  <a href="http://localhost:3001">localhost:3001</a> · Built with Next.js + Claude AI
+  <a href="http://localhost:3001">localhost:3001</a> · Built with Next.js + deterministic analysis
 </div>

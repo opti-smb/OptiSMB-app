@@ -1,8 +1,7 @@
 'use client';
 import { createContext, useContext, useState, useEffect } from 'react';
-import { mockStatements, mockNotifications, mockSavedScenarios, mockMerchantAgreements } from '@/lib/mockData';
+import { mockSavedScenarios } from '@/lib/mockData';
 import { generateId } from '@/lib/utils';
-import { getStatementDisplayCurrency, formatMoney } from '@/lib/currencyConversion';
 
 const AppContext = createContext(null);
 
@@ -16,21 +15,37 @@ const defaultUser = {
   country: 'United States',
   monthlyVolume: '$50k – $250k',
   billingDate: '12 May 2026',
-  card: 'VISA •••• 4210',
+  card: '',
   notifyParseComplete: true,
   notifyReportReady: true,
-  notifyStaleness: true,
   t3DataConsent: false,
 };
+
+function mergeUserFromApi(apiUser, prev) {
+  if (!apiUser || typeof apiUser !== 'object') return prev;
+  const biz = apiUser.business || apiUser.name;
+  const initialsSrc = biz || apiUser.email || prev.business || 'A';
+  const initials = String(initialsSrc)
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  return {
+    ...prev,
+    ...apiUser,
+    name: biz || prev.name,
+    business: biz || prev.business,
+    initials,
+  };
+}
 
 export function AppProvider({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(defaultUser);
-  const [statements, setStatements] = useState(mockStatements);
-  const [currentStatementId, setCurrentStatementId] = useState(mockStatements[0]?.id);
-  const [notifications, setNotifications] = useState(mockNotifications);
+  const [statements, setStatements] = useState([]);
+  const [currentStatementId, setCurrentStatementId] = useState(null);
   const [savedScenarios, setSavedScenarios] = useState(mockSavedScenarios);
-  const [merchantAgreements, setMerchantAgreements] = useState(mockMerchantAgreements);
   const [hydrated, setHydrated] = useState(false);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [humanReviewQueue, setHumanReviewQueue] = useState([]);
@@ -42,11 +57,7 @@ export function AppProvider({ children }) {
         const s = JSON.parse(raw);
         if (s.isAuthenticated !== undefined) setIsAuthenticated(s.isAuthenticated);
         if (s.user) setUser(u => ({ ...defaultUser, ...s.user }));
-        if (s.statements?.length) setStatements(s.statements);
-        if (s.currentStatementId) setCurrentStatementId(s.currentStatementId);
-        if (s.notifications?.length) setNotifications(s.notifications);
         if (s.savedScenarios) setSavedScenarios(s.savedScenarios);
-        if (s.merchantAgreements) setMerchantAgreements(s.merchantAgreements);
         if (s.onboardingDone !== undefined) setOnboardingDone(s.onboardingDone);
         if (s.humanReviewQueue) setHumanReviewQueue(s.humanReviewQueue);
       }
@@ -56,29 +67,151 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (!hydrated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await fetch('/api/auth/me', { credentials: 'include' });
+        if (cancelled || !me.ok) return;
+        const j = await me.json();
+        if (j.user) setUser((prev) => mergeUserFromApi(j.user, prev));
+        setIsAuthenticated(true);
+        const st = await fetch('/api/statements', { credentials: 'include' });
+        if (cancelled) return;
+        if (!st.ok) {
+          setStatements([]);
+          setCurrentStatementId(null);
+          return;
+        }
+        const sj = await st.json();
+        if (Array.isArray(sj.statements)) {
+          setStatements(sj.statements);
+          setCurrentStatementId((cur) =>
+            sj.statements.length === 0
+              ? null
+              : sj.statements.some((s) => s.id === cur)
+                ? cur
+                : sj.statements[0].id,
+          );
+        }
+      } catch {
+        /* offline or DATABASE_URL unset */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
     try {
       localStorage.setItem('smb_state', JSON.stringify({
-        isAuthenticated, user, statements, currentStatementId,
-        notifications, savedScenarios, merchantAgreements, onboardingDone, humanReviewQueue,
+        _v: 2,
+        isAuthenticated, user,
+        savedScenarios, onboardingDone, humanReviewQueue,
       }));
     } catch {}
-  }, [isAuthenticated, user, statements, currentStatementId, notifications, savedScenarios, merchantAgreements, onboardingDone, humanReviewQueue, hydrated]);
+  }, [isAuthenticated, user, savedScenarios, onboardingDone, humanReviewQueue, hydrated]);
 
-  const login = ({ email }) => {
-    setUser(u => ({ ...u, email: email || u.email }));
+  const login = async ({ email }) => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.user) setUser((prev) => mergeUserFromApi(j.user, prev));
+        setIsAuthenticated(true);
+        const stRes = await fetch('/api/statements', { credentials: 'include' });
+        if (stRes.ok) {
+          const sj = await stRes.json();
+          if (Array.isArray(sj.statements)) {
+            setStatements(sj.statements);
+            setCurrentStatementId(sj.statements[0]?.id ?? null);
+          }
+        } else {
+          setStatements([]);
+          setCurrentStatementId(null);
+        }
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    setUser((u) => ({ ...u, email: email || u.email }));
     setIsAuthenticated(true);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* ignore */
+    }
     setIsAuthenticated(false);
+    setStatements([]);
+    setCurrentStatementId(null);
   };
 
-  const register = (data) => {
-    setUser(u => ({
+  const register = async (data) => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: data.email,
+          businessName: data.business || data.name,
+          industry: data.industry,
+          country: data.country,
+          tier: data.tier || 'L1',
+          monthlyVolume: data.monthlyVolume,
+        }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.user) {
+          setUser((prev) =>
+            mergeUserFromApi(
+              {
+                ...j.user,
+                monthlyVolume: data.monthlyVolume ?? j.user.monthlyVolume,
+              },
+              { ...defaultUser, ...prev },
+            ),
+          );
+        }
+        setIsAuthenticated(true);
+        setOnboardingDone(false);
+        const stRes = await fetch('/api/statements', { credentials: 'include' });
+        if (stRes.ok) {
+          const sj = await stRes.json();
+          if (Array.isArray(sj.statements)) {
+            setStatements(sj.statements);
+            setCurrentStatementId(sj.statements[0]?.id ?? null);
+          }
+        } else {
+          setStatements([]);
+          setCurrentStatementId(null);
+        }
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    setUser((u) => ({
       ...defaultUser,
       ...u,
       ...data,
-      initials: (data.business || data.name || 'HR').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+      initials: (data.business || data.name || 'HR')
+        .split(' ')
+        .map((w) => w[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase(),
     }));
     setIsAuthenticated(true);
     setOnboardingDone(false);
@@ -97,38 +230,27 @@ export function AppProvider({ children }) {
   const getCurrentStatement = () =>
     statements.find(s => s.id === currentStatementId) || statements[0];
 
-  // Staleness check: returns amber (90d) or red (180d) for a statement's benchmark data
-  const checkStaleness = (stmt) => {
-    if (!stmt?.dataAsOf) return null;
-    const asOf = new Date(stmt.dataAsOf);
-    const now = new Date();
-    const daysOld = Math.floor((now - asOf) / (1000 * 60 * 60 * 24));
-    if (daysOld >= 180) return { level: 'red', daysOld };
-    if (daysOld >= 90) return { level: 'amber', daysOld };
-    return null;
-  };
-
-  // Duplicate detection: returns true if a statement with same acquirer + period exists
+  /** Same acquirer and billing period as an existing statement. */
   const isDuplicate = (acquirer, period) =>
-    statements.some(s => s.acquirer === acquirer && s.period === period);
+    statements.some((s) => s.acquirer === acquirer && s.period === period);
 
-  const addStatement = (stmt) => {
-    const id = generateId();
-    const full = { ...stmt, id };
-    setStatements(prev => [full, ...prev]);
-    setCurrentStatementId(id);
+  const addStatement = async (stmt) => {
+    const tempId = generateId();
+    const full = { ...stmt, id: tempId };
+    setStatements((prev) => [full, ...prev]);
+    setCurrentStatementId(tempId);
 
     // Route to human review if parsing confidence < 60% (low = simulated <60%)
     if (stmt.parsingConfidence === 'low') {
       const reviewItem = {
-        id: 'rev-' + id,
-        statementId: id,
+        id: 'rev-' + tempId,
+        statementId: tempId,
         fileName: stmt.fileName,
         submittedAt: new Date().toISOString(),
         status: 'pending',
         estimatedCompletion: '4 business hours',
       };
-      setHumanReviewQueue(prev => [reviewItem, ...prev]);
+      setHumanReviewQueue((prev) => [reviewItem, ...prev]);
     }
 
     // Simulate email notification
@@ -136,69 +258,62 @@ export function AppProvider({ children }) {
       simulateEmail('parse_complete', stmt);
     }
 
-    const ccy = getStatementDisplayCurrency(stmt.parsedData);
-    const gv = stmt.parsedData?.total_transaction_volume;
-    const volPart =
-      gv != null && Number.isFinite(Number(gv))
-        ? `${formatMoney(Number(gv), ccy)} (${ccy}) · `
-        : `${ccy} · `;
-
-    addNotification({
-      type: 'parse_complete',
-      title: `Parsing complete — ${stmt.acquirer} ${stmt.period}`,
-      message: `${stmt.fileName} parsed. ${volPart}effective rate ${stmt.parsedData?.effective_rate?.toFixed(2) ?? '—'}%.`,
-      date: new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
-      emailSent: user.notifyParseComplete,
-    });
-
-    if (user.notifyReportReady) {
-      setTimeout(() => {
-        addNotification({
-          type: 'report_ready',
-          title: `Report ready — ${stmt.acquirer} ${stmt.period}`,
-          message: `Full analysis available. ${stmt.discrepancies?.length || 0} discrepancies detected.`,
-          date: new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
-          emailSent: true,
-        });
-      }, 800);
+    try {
+      const { id: _omit, ...stmtForApi } = full;
+      const res = await fetch('/api/statements', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stmtForApi),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.statement?.id) {
+          setStatements((prev) => prev.map((s) => (s.id === tempId ? j.statement : s)));
+          setCurrentStatementId(j.statement.id);
+          setHumanReviewQueue((prev) =>
+            prev.map((r) => (r.statementId === tempId ? { ...r, statementId: j.statement.id } : r)),
+          );
+          return j.statement.id;
+        }
+      }
+    } catch {
+      /* DATABASE_URL unset or offline */
     }
 
-    return id;
+    return tempId;
   };
 
   const simulateEmail = (type, data) => {
     // In production this calls a real email service (SendGrid/Resend)
     // For now this is a no-op simulation — toasts handle user feedback
-    console.log('[Email simulation]', type, data?.fileName || '');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Email simulation]', type, data?.fileName || '');
+    }
   };
 
   const updateStatement = (id, data) => {
     setStatements(prev => prev.map(s => s.id === id ? { ...s, ...data } : s));
   };
 
-  const deleteStatement = (id) => {
-    setStatements(prev => prev.filter(s => s.id !== id));
-    if (currentStatementId === id) {
-      const remaining = statements.filter(s => s.id !== id);
-      setCurrentStatementId(remaining[0]?.id || null);
+  const deleteStatement = async (id) => {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id));
+    if (isUuid) {
+      try {
+        await fetch(`/api/statements/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' });
+      } catch {
+        /* ignore */
+      }
     }
-    setHumanReviewQueue(prev => prev.filter(r => r.statementId !== id));
-  };
-
-  const addNotification = (notif) => {
-    setNotifications(prev => [{ ...notif, id: Date.now(), read: false }, ...prev]);
-  };
-
-  const markNotificationRead = (id) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
-
-  const markAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  };
-
-  const dismissNotification = (id) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
+    setStatements((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      setCurrentStatementId((cur) => {
+        if (cur !== id) return cur;
+        return next[0]?.id || null;
+      });
+      return next;
+    });
+    setHumanReviewQueue((prev) => prev.filter((r) => r.statementId !== id));
   };
 
   const saveScenario = (scenario) => {
@@ -213,31 +328,6 @@ export function AppProvider({ children }) {
     setSavedScenarios(prev => prev.filter(s => s.id !== id));
   };
 
-  // Merchant agreement — version controlled
-  const addMerchantAgreement = (data) => {
-    const id = 'agr-' + generateId();
-    const version = `v${merchantAgreements.length + 1}.0`;
-    const newAgr = { ...data, id, version, status: 'Active' };
-    setMerchantAgreements(prev => {
-      const updated = prev.map(a => ({ ...a, status: 'Superseded' }));
-      return [newAgr, ...updated];
-    });
-    addNotification({
-      type: 'agreement_uploaded',
-      title: 'Merchant agreement uploaded',
-      message: `${data.fileName} (${version}) linked to your account. Discrepancy checking now enabled.`,
-      date: new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
-      emailSent: false,
-    });
-    return id;
-  };
-
-  const deleteAgreement = (id) => {
-    setMerchantAgreements(prev => prev.filter(a => a.id !== id));
-  };
-
-  const getActiveAgreement = () => merchantAgreements.find(a => a.status === 'Active') || null;
-
   const exportUserData = () => {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -247,42 +337,42 @@ export function AppProvider({ children }) {
         period: s.period, uploadDate: s.uploadDate, status: s.status,
         effectiveRate: s.parsedData?.effective_rate,
       })),
-      merchantAgreements: merchantAgreements.map(a => ({
-        id: a.id, fileName: a.fileName, version: a.version, uploadDate: a.uploadDate,
-      })),
       savedScenarios,
     };
     return data;
   };
 
-  const deleteAccount = () => {
+  const deleteAccount = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* ignore */
+    }
     setStatements([]);
-    setNotifications([]);
     setSavedScenarios([]);
-    setMerchantAgreements([]);
     setHumanReviewQueue([]);
     setOnboardingDone(false);
+    setCurrentStatementId(null);
     setIsAuthenticated(false);
     setUser(defaultUser);
-    try { localStorage.removeItem('smb_state'); } catch {}
+    try {
+      localStorage.removeItem('smb_state');
+    } catch {
+      /* ignore */
+    }
   };
-
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const activeAgreement = getActiveAgreement();
 
   return (
     <AppContext.Provider value={{
-      isAuthenticated, user, statements, currentStatementId, notifications,
-      savedScenarios, merchantAgreements, activeAgreement, unreadCount, hydrated,
+      isAuthenticated, user, statements, currentStatementId,
+      savedScenarios, hydrated,
       onboardingDone, humanReviewQueue,
       login, logout, register, updateUser, updateTier,
       completeOnboarding,
       getCurrentStatement, addStatement, updateStatement, deleteStatement,
       setCurrentStatementId,
-      addNotification, markNotificationRead, markAllRead, dismissNotification,
       saveScenario, deleteScenario,
-      addMerchantAgreement, deleteAgreement, getActiveAgreement,
-      checkStaleness, isDuplicate,
+      isDuplicate,
       exportUserData,
       deleteAccount,
     }}>

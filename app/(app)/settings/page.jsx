@@ -22,18 +22,46 @@ export default function SettingsPage() {
   const [t3Consent, setT3Consent] = useState(user.t3DataConsent || false);
   const [notifyParse, setNotifyParse] = useState(user.notifyParseComplete ?? true);
   const [notifyReport, setNotifyReport] = useState(user.notifyReportReady ?? true);
-  const [notifyStale, setNotifyStale] = useState(user.notifyStaleness ?? true);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [currency, setCurrency] = useState('USD');
 
-  const saveProfile = () => {
+  const saveProfile = async () => {
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ business: biz, name: biz, industry, country }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.user) {
+          updateUser({
+            business: j.user.business ?? biz,
+            name: j.user.name ?? biz,
+            email: j.user.email ?? email,
+            industry: j.user.industry ?? industry,
+            country: j.user.country ?? country,
+            tier: j.user.tier ?? user.tier,
+          });
+        }
+        addToast({ type: 'success', title: 'Profile saved', message: 'Your account has been updated.' });
+        return;
+      }
+    } catch {
+      /* offline or no DATABASE_URL */
+    }
     updateUser({ business: biz, name: biz, email, industry, country });
-    addToast({ type: 'success', title: 'Profile saved', message: 'Your business profile has been updated.' });
+    addToast({
+      type: 'success',
+      title: 'Profile saved (this device)',
+      message: 'Could not reach the server — preferences stored locally only.',
+    });
   };
 
   const saveNotifications = () => {
-    updateUser({ notifyParseComplete: notifyParse, notifyReportReady: notifyReport, notifyStaleness: notifyStale });
+    updateUser({ notifyParseComplete: notifyParse, notifyReportReady: notifyReport });
     addToast({ type: 'success', title: 'Notification preferences saved' });
   };
 
@@ -64,7 +92,7 @@ export default function SettingsPage() {
     setT3Consent(v);
     updateUser({ t3DataConsent: v });
     if (v) {
-      addToast({ type: 'info', title: 'Data contribution enabled', message: 'Anonymised rate data will contribute to benchmarking. Thank you.' });
+      addToast({ type: 'info', title: 'Data contribution enabled', message: 'Thank you — anonymised aggregates help improve the product.' });
     }
   };
 
@@ -121,7 +149,7 @@ export default function SettingsPage() {
           <div>
             <div className="smallcaps text-ink-400">Next billing</div>
             <div className="font-mono text-[15px] tabular">{user.billingDate || '12 May 2026'}</div>
-            <div className="text-[12px] text-ink-400">{user.card || 'VISA •••• 4210'}</div>
+            <div className="text-[12px] text-ink-400">{user.card?.trim() ? user.card : '—'}</div>
           </div>
           <div className="flex items-end">
             <a href="/upgrade"><Btn variant="primary" icon={<Icon.ArrowRight size={13} />}>{user.tier === 'Free' ? 'Upgrade plan' : 'Change plan'}</Btn></a>
@@ -132,7 +160,7 @@ export default function SettingsPage() {
           <div className="grid sm:grid-cols-3 gap-3 text-[12px]">
             {[
               { feature: 'Statements / month', free: '1', l1: '5', l2: 'Unlimited' },
-              { feature: 'Discrepancy report', free: '—', l1: 'Yes', l2: 'Yes' },
+              { feature: 'Fee breakdown + confidence', free: 'Yes', l1: 'Yes', l2: 'Yes' },
               { feature: 'Q&A assistant', free: '—', l1: 'Yes', l2: 'Yes' },
               { feature: 'What-if modelling', free: '—', l1: '—', l2: 'Yes' },
               { feature: 'Export to Excel', free: '—', l1: '—', l2: 'Yes' },
@@ -186,13 +214,7 @@ export default function SettingsPage() {
             checked={notifyReport}
             onChange={setNotifyReport}
             label="Report ready"
-            hint="In-app + simulated email when a full analysis with benchmarks is available."
-          />
-          <Toggle
-            checked={notifyStale}
-            onChange={setNotifyStale}
-            label="Benchmark staleness alerts"
-            hint="In-app alert when rate panel data for an acquirer exceeds 90 days (amber threshold)."
+            hint="In-app + simulated email when your full report is ready to open."
           />
         </div>
         <div className="mt-4 p-3 bg-amber-soft/30 border border-amber/30 rounded-lg text-[12px] text-ink-500 flex items-start gap-2">
@@ -220,8 +242,8 @@ export default function SettingsPage() {
               <Toggle
                 checked={t3Consent}
                 onChange={handleT3Consent}
-                label="Contribute anonymised rate data to benchmarking (T3)"
-                hint="Your parsed rates (never your business details or MID) contribute to OptiSMB's SMB rate panel. This improves benchmark accuracy for all users. Explicit opt-in required — off by default."
+                label="Contribute anonymised usage statistics (opt-in)"
+                hint="High-level aggregates only (never your business name, MID, or raw statement text). Off by default — helps us improve parsing and reporting for everyone."
               />
             </div>
           </div>

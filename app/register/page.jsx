@@ -70,7 +70,7 @@ export default function RegisterPage() {
       if (!biz) { addToast({ type: 'error', title: 'Business name required' }); return; }
       setLoading(true);
       await new Promise(r => setTimeout(r, 500));
-      register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
+      await register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
       addToast({ type: 'success', title: 'Account created!', message: 'Welcome to OptiSMB.' });
       router.push('/dashboard');
     }

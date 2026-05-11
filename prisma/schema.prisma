@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["identity", "statement", "agreement", "benchmark"]
+}
+
+model EncryptionKeyRegistry {
+  encryptionKeyId   String    @id @default(dbgenerated("gen_random_uuid()")) @map("encryption_key_id") @db.Uuid
+  fingerprintSha256 String    @unique @map("fingerprint_sha256") @db.Char(64)
+  purpose             String    @db.VarChar(40)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  retiredAt           DateTime? @map("retired_at") @db.Timestamptz(6)
+
+  users       User[]
+  statements  Statement[]
+  parsedDatas ParsedData[]
+
+  @@index([purpose])
+  @@map("encryption_key_registry")
+  @@schema("identity")
+}
+
+model User {
+  userId                  String    @id @default(dbgenerated("gen_random_uuid()")) @map("user_id") @db.Uuid
+  encryptionKeyId         String?   @map("encryption_key_id") @db.Uuid
+  emailEncrypted          Bytes     @map("email_encrypted")
+  emailHash               String    @unique @map("email_hash") @db.Char(64)
+  businessNameEncrypted   Bytes?    @map("business_name_encrypted")
+  industry                String?   @db.VarChar(100)
+  country                 String?   @db.Char(2)
+  tier                    String    @db.VarChar(10)
+  roles                   String[]
+  mfaEnabled              Boolean   @default(false) @map("mfa_enabled")
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt               DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  encryptionKey EncryptionKeyRegistry? @relation(fields: [encryptionKeyId], references: [encryptionKeyId], onDelete: Restrict)
+  refreshTokens        RefreshToken[]
+  statements           Statement[]
+  merchantAgreements   MerchantAgreement[]
+
+  @@index([encryptionKeyId])
+  @@map("users")
+  @@schema("identity")
+}
+
+model RefreshToken {
+  jti            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  tokenHash      String    @map("token_hash") @db.Char(60)
+  familyId       String    @map("family_id") @db.Uuid
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason  String?   @map("revoked_reason") @db.VarChar(50)
+
+  user User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+  @@schema("identity")
+}
+
+model Statement {
+  statementId         String    @id @default(dbgenerated("gen_random_uuid()")) @map("statement_id") @db.Uuid
+  userId              String    @map("user_id") @db.Uuid
+  encryptionKeyId     String?   @map("encryption_key_id") @db.Uuid
+  s3KeyEncrypted        Bytes?    @map("s3_key_encrypted")
+  fileName              String    @map("file_name")
+  fileSizeBytes         BigInt    @map("file_size_bytes")
+  fileSha256            String?   @map("file_sha256") @db.Char(64)
+  merchantIdEncrypted Bytes?    @map("merchant_id_encrypted")
+  acquirerName          String?   @map("acquirer_name")
+  billingPeriodFrom     DateTime? @map("billing_period_from") @db.Date
+  billingPeriodTo       DateTime? @map("billing_period_to") @db.Date
+  parseStatus           String    @default("queued") @map("parse_status") @db.VarChar(30)
+  idempotencyKey        String    @unique @map("idempotency_key") @db.Uuid
+
+  user           User                   @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  encryptionKey  EncryptionKeyRegistry? @relation(fields: [encryptionKeyId], references: [encryptionKeyId], onDelete: Restrict)
+  parsedData     ParsedData?
+
+  @@index([userId])
+  @@index([parseStatus])
+  @@index([userId, billingPeriodFrom])
+  @@map("statements")
+  @@schema("statement")
+}
+
+model ParsedData {
+  statementId              String  @id @map("statement_id") @db.Uuid
+  encryptionKeyId          String? @map("encryption_key_id") @db.Uuid
+  totalVolumeEncrypted     Bytes?  @map("total_volume_encrypted")
+  totalFeesEncrypted       Bytes?  @map("total_fees_encrypted")
+  effectiveRateEncrypted   Bytes?  @map("effective_rate_encrypted")
+  interchangeFeesEncrypted Bytes?  @map("interchange_fees_encrypted")
+  schemeFeesEncrypted      Bytes?  @map("scheme_fees_encrypted")
+  channelSplitEncrypted    Bytes?  @map("channel_split_encrypted")
+  feeLinesEncrypted        Bytes?  @map("fee_lines_encrypted")
+  parsingConfidence           String? @map("parsing_confidence") @db.VarChar(10)
+  currency                      String? @db.Char(3)
+  comparisonSnapshotSha256      String? @map("comparison_snapshot_sha256") @db.Char(64)
+
+  statement     Statement              @relation(fields: [statementId], references: [statementId], onDelete: Cascade)
+  encryptionKey EncryptionKeyRegistry? @relation(fields: [encryptionKeyId], references: [encryptionKeyId], onDelete: Restrict)
+
+  @@map("parsed_data")
+  @@schema("statement")
+}
+
+model MerchantAgreement {
+  agreementId    String    @id @default(dbgenerated("gen_random_uuid()")) @map("agreement_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  s3KeyEncrypted Bytes?    @map("s3_key_encrypted")
+  fileName       String    @map("file_name")
+  effectiveFrom  DateTime? @map("effective_from") @db.Date
+  supersededAt   DateTime? @map("superseded_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user            User              @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  contractedRates ContractedRate[]
+
+  @@index([userId])
+  @@map("merchant_agreements")
+  @@schema("agreement")
+}
+
+model ContractedRate {
+  rateId                   String  @id @default(dbgenerated("gen_random_uuid()")) @map("rate_id") @db.Uuid
+  agreementId              String  @map("agreement_id") @db.Uuid
+  feeType                 String  @map("fee_type") @db.VarChar(255)
+  contractedRateEncrypted Bytes?  @map("contracted_rate_encrypted")
+  cardType                String? @map("card_type") @db.VarChar(255)
+  channel                 String? @map("channel") @db.VarChar(255)
+  notesEncrypted          Bytes?  @map("notes_encrypted")
+
+  agreement MerchantAgreement @relation(fields: [agreementId], references: [agreementId], onDelete: Cascade)
+
+  @@index([agreementId])
+  @@map("contracted_rates")
+  @@schema("agreement")
+}
+
+model Acquirer {
+  acquirerId String    @id @default(dbgenerated("gen_random_uuid()")) @map("acquirer_id") @db.Uuid
+  name       String
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rates AcquirerRate[]
+
+  @@map("acquirers")
+  @@schema("benchmark")
+}
+
+model AcquirerRate {
+  rateId        String   @id @default(dbgenerated("gen_random_uuid()")) @map("rate_id") @db.Uuid
+  acquirerId    String   @map("acquirer_id") @db.Uuid
+  effectiveRate Decimal  @map("effective_rate") @db.Decimal(12, 6)
+  dataTier      String   @map("data_tier") @db.VarChar(5)
+  dataAsOf      DateTime @map("data_as_of") @db.Date
+  isCurrent     Boolean  @default(true) @map("is_current")
+  sourceRef     String?  @map("source_ref")
+
+  acquirer Acquirer @relation(fields: [acquirerId], references: [acquirerId], onDelete: Cascade)
+
+  @@index([acquirerId, isCurrent])
+  @@map("acquirer_rates")
+  @@schema("benchmark")
+}
