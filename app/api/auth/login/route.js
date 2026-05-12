@@ -51,7 +51,17 @@ export async function POST(request) {
         roles: Array.isArray(user.roles) ? user.roles : ['user'],
       },
     });
-    setSessionCookie(res, user.userId);
+    if (!setSessionCookie(res, user.userId)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'session_not_configured',
+          message:
+            'Set SESSION_SECRET (16+ characters) in .env so the login cookie can be issued; without it saves to the database are blocked.',
+        },
+        { status: 503 },
+      );
+    }
     return res;
   } catch (e) {
     console.error('[auth/login]', e);

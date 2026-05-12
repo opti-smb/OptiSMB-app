@@ -1,9 +1,48 @@
 'use client';
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { mockSavedScenarios } from '@/lib/mockData';
 import { generateId } from '@/lib/utils';
 
 const NOTIFICATIONS_CAP = 50;
+
+/** Per-account notification store (survives logout on this browser). */
+const NOTIFICATIONS_LS_PREFIX = 'optismb_in_app_notifications:';
+
+/** @param {string | null} serverUserId @param {string | null} demoIdentityEmail normalized */
+function notificationsStorageKey(serverUserId, demoIdentityEmail) {
+  if (serverUserId) return `${NOTIFICATIONS_LS_PREFIX}u:${serverUserId}`;
+  if (demoIdentityEmail) return `${NOTIFICATIONS_LS_PREFIX}demo:${demoIdentityEmail}`;
+  return null;
+}
+
+/** @param {string | null} raw */
+function parseNotificationsJson(raw) {
+  if (!raw) return [];
+  try {
+    const a = JSON.parse(raw);
+    if (!Array.isArray(a)) return [];
+    return a.filter((n) => n && typeof n === 'object' && n.id && n.title);
+  } catch {
+    return [];
+  }
+}
+
+/** @param {string | null} key @param {unknown[]} list */
+function writeNotificationsToStorage(key, list) {
+  if (!key || typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify(list.slice(0, NOTIFICATIONS_CAP)));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @param {string | null} serverUserId @param {string | null} demoIdentityEmail */
+function readPersistedNotifications(serverUserId, demoIdentityEmail) {
+  const key = notificationsStorageKey(serverUserId, demoIdentityEmail);
+  if (!key) return [];
+  return parseNotificationsJson(localStorage.getItem(key));
+}
 
 function newNotificationId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -29,10 +68,18 @@ const defaultUser = {
   roles: [],
 };
 
+/**
+ * Merge server profile into client user. Identity always comes from `apiUser` so a new login
+ * cannot keep another user's name/business from `localStorage`.
+ * @param {Record<string, unknown>} apiUser
+ * @param {Record<string, unknown>|null|undefined} prev
+ */
 function mergeUserFromApi(apiUser, prev) {
   if (!apiUser || typeof apiUser !== 'object') return prev;
-  const biz = apiUser.business || apiUser.name;
-  const initialsSrc = biz || apiUser.email || prev.business || 'A';
+  const email = String(apiUser.email || '').trim();
+  const biz = String(apiUser.business || apiUser.name || '').trim();
+  const displayName = biz || email || 'Account';
+  const initialsSrc = displayName || 'A';
   const initials = String(initialsSrc)
     .split(/\s+/)
     .map((w) => w[0])
@@ -40,12 +87,18 @@ function mergeUserFromApi(apiUser, prev) {
     .slice(0, 2)
     .toUpperCase();
   return {
-    ...prev,
+    ...defaultUser,
+    ...(prev && typeof prev === 'object' ? prev : {}),
     ...apiUser,
-    name: biz || prev.name,
-    business: biz || prev.business,
+    email,
+    name: displayName,
+    business: biz,
+    monthlyVolume:
+      apiUser.monthlyVolume != null && apiUser.monthlyVolume !== ''
+        ? apiUser.monthlyVolume
+        : prev?.monthlyVolume ?? defaultUser.monthlyVolume,
+    roles: Array.isArray(apiUser.roles) ? apiUser.roles : [],
     initials,
-    roles: Array.isArray(apiUser.roles) ? apiUser.roles : prev.roles || [],
   };
 }
 
@@ -59,6 +112,47 @@ export function AppProvider({ children }) {
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [humanReviewQueue, setHumanReviewQueue] = useState([]);
   const [inAppNotifications, setInAppNotifications] = useState([]);
+  const inAppNotificationsRef = useRef([]);
+  /** DB session user id; null in demo (no DATABASE_URL) or signed out */
+  const [serverUserId, setServerUserId] = useState(null);
+  /** Normalized email for local-only demo identity */
+  const [demoIdentityEmail, setDemoIdentityEmail] = useState(null);
+  const serverUserIdRef = useRef(null);
+  const demoEmailRef = useRef(null);
+
+  useEffect(() => {
+    serverUserIdRef.current = serverUserId;
+  }, [serverUserId]);
+  useEffect(() => {
+    demoEmailRef.current = demoIdentityEmail;
+  }, [demoIdentityEmail]);
+
+  useEffect(() => {
+    inAppNotificationsRef.current = inAppNotifications;
+  }, [inAppNotifications]);
+
+  /** Scenarios / review queue / onboarding — not tied to notification persistence */
+  const clearEphemeralClientState = useCallback(() => {
+    setHumanReviewQueue([]);
+    setSavedScenarios([]);
+    setOnboardingDone(false);
+  }, []);
+
+  /** Clear notifications / scenarios when switching server user, demo user, or demo↔server */
+  const wipeIfSwitchingAccount = useCallback((nextServerUserId, nextDemoEmailNorm) => {
+    let wipe = false;
+    if (nextServerUserId) {
+      if (demoEmailRef.current) wipe = true;
+      if (serverUserIdRef.current && serverUserIdRef.current !== nextServerUserId) wipe = true;
+    } else if (nextDemoEmailNorm) {
+      if (demoEmailRef.current && demoEmailRef.current !== nextDemoEmailNorm) wipe = true;
+      if (serverUserIdRef.current) wipe = true;
+    }
+    if (wipe) {
+      clearEphemeralClientState();
+      setInAppNotifications([]);
+    }
+  }, [clearEphemeralClientState]);
 
   const pushNotification = useCallback((item) => {
     const row = {
@@ -99,11 +193,30 @@ export function AppProvider({ children }) {
       if (raw) {
         const s = JSON.parse(raw);
         if (s.isAuthenticated !== undefined) setIsAuthenticated(s.isAuthenticated);
-        if (s.user) setUser(u => ({ ...defaultUser, ...s.user }));
+        if (s.user) setUser((u) => ({ ...defaultUser, ...s.user }));
         if (s.savedScenarios) setSavedScenarios(s.savedScenarios);
         if (s.onboardingDone !== undefined) setOnboardingDone(s.onboardingDone);
         if (s.humanReviewQueue) setHumanReviewQueue(s.humanReviewQueue);
-        if (Array.isArray(s.inAppNotifications)) {
+        if (typeof s.serverUserId === 'string' && s.serverUserId) setServerUserId(s.serverUserId);
+        if (typeof s.demoIdentityEmail === 'string' && s.demoIdentityEmail)
+          setDemoIdentityEmail(s.demoIdentityEmail);
+        const sid = typeof s.serverUserId === 'string' && s.serverUserId ? s.serverUserId : null;
+        const demo = typeof s.demoIdentityEmail === 'string' && s.demoIdentityEmail ? s.demoIdentityEmail : null;
+        const nk = notificationsStorageKey(sid, demo);
+        if (nk) {
+          const fromKey = readPersistedNotifications(sid, demo);
+          if (fromKey.length) {
+            setInAppNotifications(fromKey);
+          } else if (Array.isArray(s.inAppNotifications)) {
+            const legacy = s.inAppNotifications.filter(
+              (n) => n && typeof n === 'object' && n.id && n.title,
+            );
+            if (legacy.length) {
+              setInAppNotifications(legacy);
+              writeNotificationsToStorage(nk, legacy);
+            }
+          }
+        } else if (Array.isArray(s.inAppNotifications)) {
           setInAppNotifications(
             s.inAppNotifications.filter(
               (n) => n && typeof n === 'object' && n.id && n.title,
@@ -121,9 +234,35 @@ export function AppProvider({ children }) {
     (async () => {
       try {
         const me = await fetch('/api/auth/me', { credentials: 'include' });
-        if (cancelled || !me.ok) return;
+        if (cancelled) return;
+        if (!me.ok) {
+          // 503 = no DATABASE_URL — keep local demo session from localStorage.
+          // 401 = DB configured but no valid session cookie — do not stay "logged in" from stale localStorage.
+          if (me.status === 401) {
+            setIsAuthenticated(false);
+            setStatements([]);
+            setCurrentStatementId(null);
+            setServerUserId(null);
+            setDemoIdentityEmail(null);
+            setUser(defaultUser);
+            clearEphemeralClientState();
+            setInAppNotifications([]);
+            try {
+              localStorage.removeItem('smb_state');
+            } catch {
+              /* ignore */
+            }
+          }
+          return;
+        }
         const j = await me.json();
-        if (j.user) setUser((prev) => mergeUserFromApi(j.user, prev));
+        const prevSid = serverUserIdRef.current;
+        const sameSession = !!(prevSid && j.userId && prevSid === j.userId);
+        wipeIfSwitchingAccount(j.userId, null);
+        setServerUserId(j.userId);
+        setDemoIdentityEmail(null);
+        setInAppNotifications(readPersistedNotifications(j.userId, null));
+        if (j.user) setUser((prev) => mergeUserFromApi(j.user, sameSession ? prev : defaultUser));
         setIsAuthenticated(true);
         const st = await fetch('/api/statements', { credentials: 'include' });
         if (cancelled) return;
@@ -150,20 +289,36 @@ export function AppProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [hydrated]);
+  }, [hydrated, wipeIfSwitchingAccount, clearEphemeralClientState]);
 
   useEffect(() => {
     if (!hydrated) return;
     try {
       localStorage.setItem('smb_state', JSON.stringify({
-        _v: 3,
-        isAuthenticated, user,
-        savedScenarios, onboardingDone, humanReviewQueue,
-        inAppNotifications,
+        _v: 4,
+        isAuthenticated,
+        user,
+        savedScenarios,
+        onboardingDone,
+        humanReviewQueue,
+        serverUserId: isAuthenticated && serverUserId ? serverUserId : null,
+        demoIdentityEmail: isAuthenticated && demoIdentityEmail ? demoIdentityEmail : null,
       }));
     } catch {}
-  }, [isAuthenticated, user, savedScenarios, onboardingDone, humanReviewQueue, inAppNotifications, hydrated]);
+  }, [isAuthenticated, user, savedScenarios, onboardingDone, humanReviewQueue, serverUserId, demoIdentityEmail, hydrated]);
 
+  /** Persist in-app notifications per account (not inside smb_state — survives logout). */
+  useEffect(() => {
+    if (!hydrated || !isAuthenticated) return;
+    const key = notificationsStorageKey(serverUserId, demoIdentityEmail);
+    if (!key) return;
+    writeNotificationsToStorage(key, inAppNotifications);
+  }, [inAppNotifications, serverUserId, demoIdentityEmail, isAuthenticated, hydrated]);
+
+  /**
+   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string }>}
+   * `demo: true` only when the server has no DATABASE_URL (local-only mode).
+   */
   const login = async ({ email }) => {
     try {
       const res = await fetch('/api/auth/login', {
@@ -172,9 +327,15 @@ export function AppProvider({ children }) {
         credentials: 'include',
         body: JSON.stringify({ email }),
       });
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const j = await res.json();
-        if (j.user) setUser((prev) => mergeUserFromApi(j.user, prev));
+        const prevSid = serverUserIdRef.current;
+        const sameSession = !!(prevSid && body.userId && prevSid === body.userId);
+        wipeIfSwitchingAccount(body.userId, null);
+        setServerUserId(body.userId);
+        setDemoIdentityEmail(null);
+        setInAppNotifications(readPersistedNotifications(body.userId, null));
+        if (body.user) setUser((prev) => mergeUserFromApi(body.user, sameSession ? prev : defaultUser));
         setIsAuthenticated(true);
         const stRes = await fetch('/api/statements', { credentials: 'include' });
         if (stRes.ok) {
@@ -187,13 +348,42 @@ export function AppProvider({ children }) {
           setStatements([]);
           setCurrentStatementId(null);
         }
-        return;
+        return { ok: true, demo: false };
       }
+      if (body.error === 'database_not_configured') {
+        const norm = String(email).trim().toLowerCase();
+        wipeIfSwitchingAccount(null, norm);
+        setServerUserId(null);
+        setDemoIdentityEmail(norm);
+        const em = String(email).trim();
+        setUser({
+          ...defaultUser,
+          email: em,
+          name: em,
+          business: '',
+          initials: em
+            .split('@')[0]
+            .split(/[\s._-]+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((w) => w[0]?.toUpperCase())
+            .join('')
+            .slice(0, 2) || 'ME',
+        });
+        setIsAuthenticated(true);
+        setInAppNotifications(readPersistedNotifications(null, norm));
+        return { ok: true, demo: true };
+      }
+      return {
+        ok: false,
+        message:
+          body.message ||
+          (typeof body.error === 'string' ? String(body.error).replace(/_/g, ' ') : '') ||
+          `Sign in failed (${res.status})`,
+      };
     } catch {
-      /* fall through */
+      return { ok: false, message: 'Network error' };
     }
-    setUser((u) => ({ ...u, email: email || u.email }));
-    setIsAuthenticated(true);
   };
 
   const logout = async () => {
@@ -202,11 +392,30 @@ export function AppProvider({ children }) {
     } catch {
       /* ignore */
     }
+    try {
+      const key = notificationsStorageKey(serverUserId, demoIdentityEmail);
+      if (key) writeNotificationsToStorage(key, inAppNotificationsRef.current);
+    } catch {
+      /* ignore */
+    }
     setIsAuthenticated(false);
     setStatements([]);
     setCurrentStatementId(null);
+    setServerUserId(null);
+    setDemoIdentityEmail(null);
+    setUser(defaultUser);
+    setInAppNotifications([]);
+    clearEphemeralClientState();
+    try {
+      localStorage.removeItem('smb_state');
+    } catch {
+      /* ignore */
+    }
   };
 
+  /**
+   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string }>}
+   */
   const register = async (data) => {
     try {
       const res = await fetch('/api/auth/login', {
@@ -222,16 +431,22 @@ export function AppProvider({ children }) {
           monthlyVolume: data.monthlyVolume,
         }),
       });
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const j = await res.json();
-        if (j.user) {
+        const prevSid = serverUserIdRef.current;
+        const sameSession = !!(prevSid && body.userId && prevSid === body.userId);
+        wipeIfSwitchingAccount(body.userId, null);
+        setServerUserId(body.userId);
+        setDemoIdentityEmail(null);
+        setInAppNotifications(readPersistedNotifications(body.userId, null));
+        if (body.user) {
           setUser((prev) =>
             mergeUserFromApi(
               {
-                ...j.user,
-                monthlyVolume: data.monthlyVolume ?? j.user.monthlyVolume,
+                ...body.user,
+                monthlyVolume: data.monthlyVolume ?? body.user.monthlyVolume,
               },
-              { ...defaultUser, ...prev },
+              sameSession ? prev : defaultUser,
             ),
           );
         }
@@ -248,24 +463,44 @@ export function AppProvider({ children }) {
           setStatements([]);
           setCurrentStatementId(null);
         }
-        return;
+        return { ok: true, demo: false };
       }
+      if (body.error === 'database_not_configured') {
+        const norm = String(data.email || '').trim().toLowerCase();
+        wipeIfSwitchingAccount(null, norm);
+        setServerUserId(null);
+        setDemoIdentityEmail(norm);
+        setUser({
+          ...defaultUser,
+          email: data.email,
+          name: String(data.business || data.name || data.email || '').trim() || String(data.email),
+          business: String(data.business || data.name || '').trim(),
+          industry: data.industry,
+          country: data.country,
+          monthlyVolume: data.monthlyVolume,
+          tier: data.tier || 'L1',
+          initials: (data.business || data.name || 'HR')
+            .split(' ')
+            .map((w) => w[0])
+            .join('')
+            .slice(0, 2)
+            .toUpperCase(),
+        });
+        setIsAuthenticated(true);
+        setOnboardingDone(false);
+        setInAppNotifications(readPersistedNotifications(null, norm));
+        return { ok: true, demo: true };
+      }
+      return {
+        ok: false,
+        message:
+          body.message ||
+          (typeof body.error === 'string' ? String(body.error).replace(/_/g, ' ') : '') ||
+          `Registration failed (${res.status})`,
+      };
     } catch {
-      /* fall through */
+      return { ok: false, message: 'Network error' };
     }
-    setUser((u) => ({
-      ...defaultUser,
-      ...u,
-      ...data,
-      initials: (data.business || data.name || 'HR')
-        .split(' ')
-        .map((w) => w[0])
-        .join('')
-        .slice(0, 2)
-        .toUpperCase(),
-    }));
-    setIsAuthenticated(true);
-    setOnboardingDone(false);
   };
 
   const updateUser = (data) => {
@@ -285,6 +520,9 @@ export function AppProvider({ children }) {
   const isDuplicate = (acquirer, period) =>
     statements.some((s) => s.acquirer === acquirer && s.period === period);
 
+  /**
+   * @returns {Promise<{ id: string; savedToServer: boolean; message?: string }>}
+   */
   const addStatement = async (stmt) => {
     const tempId = generateId();
     const full = { ...stmt, id: tempId };
@@ -340,15 +578,43 @@ export function AppProvider({ children }) {
             prev.map((r) => (r.statementId === tempId ? { ...r, statementId: j.statement.id } : r)),
           );
           pushParseInApp(j.statement.id, true);
-          return j.statement.id;
+          return { id: j.statement.id, savedToServer: true };
         }
+        pushParseInApp(tempId, false);
+        return {
+          id: tempId,
+          savedToServer: false,
+          message: 'Server did not return a saved statement id.',
+        };
+      } else {
+        let msg;
+        try {
+          const errBody = await res.json();
+          msg = errBody.message || errBody.error;
+        } catch {
+          /* ignore */
+        }
+        pushParseInApp(tempId, false);
+        return {
+          id: tempId,
+          savedToServer: false,
+          message:
+            msg ||
+            (res.status === 401
+              ? 'Not signed in — sign in again so statements save to your account.'
+              : `Save failed (${res.status}).`),
+        };
       }
     } catch {
       /* DATABASE_URL unset or offline */
     }
 
     pushParseInApp(tempId, false);
-    return tempId;
+    return {
+      id: tempId,
+      savedToServer: false,
+      message: 'Could not reach the server to save this statement.',
+    };
   };
 
   const simulateEmail = (type, data) => {
@@ -416,12 +682,20 @@ export function AppProvider({ children }) {
     } catch {
       /* ignore */
     }
+    const uid = serverUserId;
+    const demo = demoIdentityEmail;
+    try {
+      const nkey = notificationsStorageKey(uid, demo);
+      if (nkey) localStorage.removeItem(nkey);
+    } catch {
+      /* ignore */
+    }
     setStatements([]);
-    setSavedScenarios([]);
-    setHumanReviewQueue([]);
-    setInAppNotifications([]);
-    setOnboardingDone(false);
     setCurrentStatementId(null);
+    setServerUserId(null);
+    setDemoIdentityEmail(null);
+    clearEphemeralClientState();
+    setInAppNotifications([]);
     setIsAuthenticated(false);
     setUser(defaultUser);
     try {

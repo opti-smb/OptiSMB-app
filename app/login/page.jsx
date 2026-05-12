@@ -71,8 +71,25 @@ export default function LoginPage() {
     if (!email) { addToast({ type: 'error', title: 'Email required' }); return; }
     setLoading(true);
     await new Promise(r => setTimeout(r, 600));
-    await login({ email });
-    addToast({ type: 'success', title: 'Welcome back!', message: 'Redirecting to your dashboard.' });
+    const result = await login({ email });
+    setLoading(false);
+    if (!result.ok) {
+      addToast({
+        type: 'error',
+        title: 'Sign in failed',
+        message: result.message || 'Check the terminal for server errors, then try again.',
+      });
+      return;
+    }
+    if (result.demo) {
+      addToast({
+        type: 'info',
+        title: 'Demo mode',
+        message: 'Database is not configured; your session and statements stay on this device only.',
+      });
+    } else {
+      addToast({ type: 'success', title: 'Welcome back!', message: 'Redirecting to your dashboard.' });
+    }
     router.push('/dashboard');
   };
 

@@ -70,8 +70,25 @@ export default function RegisterPage() {
       if (!biz) { addToast({ type: 'error', title: 'Business name required' }); return; }
       setLoading(true);
       await new Promise(r => setTimeout(r, 500));
-      await register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
-      addToast({ type: 'success', title: 'Account created!', message: 'Welcome to OptiSMB.' });
+      const result = await register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
+      setLoading(false);
+      if (!result.ok) {
+        addToast({
+          type: 'error',
+          title: 'Could not create account',
+          message: result.message || 'Check DATABASE_URL and SESSION_SECRET in .env, then restart the dev server.',
+        });
+        return;
+      }
+      if (result.demo) {
+        addToast({
+          type: 'info',
+          title: 'Demo mode',
+          message: 'Database is not configured; data stays on this device only.',
+        });
+      } else {
+        addToast({ type: 'success', title: 'Account created!', message: 'Welcome to OptiSMB.' });
+      }
       router.push('/dashboard');
     }
   };

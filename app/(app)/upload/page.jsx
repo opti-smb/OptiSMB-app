@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import * as Icon from '@/components/Icons';
 import { Btn, Card, Disclaimer } from '@/components/UI';
@@ -83,6 +83,11 @@ export default function UploadPage() {
   const [parsedResult, setParsedResult] = useState(null);
   const [parseError, setParseError] = useState(null);
   const fileInputRef = useRef(null);
+  /** Mirrors `file` so save uses the actual File name/size even if React state lags one frame */
+  const fileRef = useRef(null);
+  useEffect(() => {
+    fileRef.current = file;
+  }, [file]);
 
   const [linkedParts, setLinkedParts] = useState(
     /** @type {{ pos: LinkedPart | null; ecommerce: LinkedPart | null; bank: LinkedPart | null; reconciliation: LinkedPart | null }} */ ({
@@ -424,11 +429,32 @@ export default function UploadPage() {
 
   const openReport = async () => {
     if (!parsedResult) return;
+    const f = fileRef.current;
     const m = buildStatementClientModel(parsedResult.parsedData);
-    await addStatement({
-      ...parsedResult,
-      parsedData: m?.parsedData ?? parsedResult.parsedData,
-    });
+    const chosenName =
+      (typeof f?.name === 'string' && f.name.trim()) ||
+      (typeof parsedResult.fileName === 'string' && parsedResult.fileName.trim()) ||
+      'statement';
+    const chosenBytes =
+      typeof f?.size === 'number' && f.size >= 0 ? f.size : Number(parsedResult.fileSizeBytes) || 0;
+    const payload = JSON.parse(
+      JSON.stringify({
+        ...parsedResult,
+        fileName: chosenName,
+        fileSizeBytes: chosenBytes,
+        parsedData: m?.parsedData ?? parsedResult.parsedData,
+      }),
+    );
+    const save = await addStatement(payload);
+    if (!save.savedToServer) {
+      addToast({
+        type: 'warning',
+        title: 'Not saved to your account',
+        message:
+          save.message ||
+          'Sign in again from the login page so statements persist to the database.',
+      });
+    }
     router.push('/report');
   };
 
