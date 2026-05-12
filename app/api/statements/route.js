@@ -3,6 +3,13 @@ import { readSessionUserIdFromRequest } from '@/lib/server/sessionCookie.js';
 import { createStatementForUser, listStatementsForUser, dbStatementToClient } from '@/lib/server/dbStatement.js';
 
 export const runtime = 'nodejs';
+/** Never serve cached statement lists (avoids stale rows after upload in dev / proxies). */
+export const dynamic = 'force-dynamic';
+
+const NO_STORE = {
+  'Cache-Control': 'private, no-store, must-revalidate',
+  Pragma: 'no-cache',
+};
 
 function noDb() {
   return NextResponse.json({ ok: false, error: 'database_not_configured' }, { status: 503 });
@@ -17,7 +24,7 @@ export async function GET(request) {
   const userId = readSessionUserIdFromRequest(request);
   if (!userId) return unauthorized();
   const statements = await listStatementsForUser(userId);
-  return NextResponse.json({ ok: true, statements });
+  return NextResponse.json({ ok: true, statements }, { headers: NO_STORE });
 }
 
 export async function POST(request) {
@@ -36,7 +43,7 @@ export async function POST(request) {
   try {
     const { row, duplicate } = await createStatementForUser(userId, body);
     const statement = dbStatementToClient(row);
-    return NextResponse.json({ ok: true, statement, duplicate });
+    return NextResponse.json({ ok: true, statement, duplicate }, { headers: NO_STORE });
   } catch (e) {
     console.error('[statements POST]', e);
     return NextResponse.json({ ok: false, error: 'save_failed', message: String(e?.message || e) }, { status: 500 });

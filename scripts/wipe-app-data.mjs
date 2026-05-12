@@ -1,6 +1,7 @@
 /**
  * Dev / reset: deletes all rows from app tables (users, statements, agreements, benchmark).
- * Requires DATABASE_URL. Run: node scripts/wipe-app-data.mjs
+ * Requires DATABASE_URL. Run before a clean re-test: `npm run db:wipe`
+ * Run: node scripts/wipe-app-data.mjs
  */
 import { PrismaClient } from '@prisma/client';
 

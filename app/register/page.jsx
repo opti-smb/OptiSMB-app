@@ -73,11 +73,20 @@ export default function RegisterPage() {
       const result = await register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
       setLoading(false);
       if (!result.ok) {
+        const title =
+          result.error === 'email_already_registered'
+            ? 'This email is already registered'
+            : 'Could not create account';
         addToast({
           type: 'error',
-          title: 'Could not create account',
-          message: result.message || 'Check DATABASE_URL and SESSION_SECRET in .env, then restart the dev server.',
+          title,
+          message:
+            result.message ||
+            'Check DATABASE_URL and SESSION_SECRET in .env, then restart the dev server.',
         });
+        if (result.error === 'email_already_registered') {
+          setStep(0);
+        }
         return;
       }
       if (result.demo) {

@@ -74,10 +74,16 @@ export default function LoginPage() {
     const result = await login({ email });
     setLoading(false);
     if (!result.ok) {
+      const title =
+        result.error === 'no_account'
+          ? 'No account for this email'
+          : 'Could not sign in';
       addToast({
         type: 'error',
-        title: 'Sign in failed',
-        message: result.message || 'Check the terminal for server errors, then try again.',
+        title,
+        message:
+          result.message ||
+          'Check your connection or try again. If the problem continues, contact support.',
       });
       return;
     }

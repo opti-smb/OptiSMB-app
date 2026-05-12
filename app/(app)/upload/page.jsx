@@ -12,8 +12,23 @@ import { getStatementDisplayCurrency, formatMoney } from '@/lib/currencyConversi
 import { parseStatementUploadFile } from '@/lib/parseStatementUpload';
 import { mergeLinkedStatementUploads } from '@/lib/mergeLinkedStatementUploads';
 import { inferStatementRole, readWorkbookSheetNamesFromFile, resolveRoleWhenSlotTaken, statementCategoryUploadedLabel } from '@/lib/inferStatementFileRole';
-import { PLEASE_UPLOAD_PROPER_BANK_STATEMENT } from '@/lib/statementUploadMessages';
+import {
+  PLEASE_UPLOAD_PROPER_BANK_STATEMENT,
+  PAYMENT_FILE_INPUT_ACCEPT,
+  handleParseDemoOutcome,
+  validateUploadFile,
+} from '@/lib/statementUploadGate';
 import { buildStatementClientModel } from '@/lib/statementClientModel';
+
+/** Detach parser output from any shared buffers the next upload may overwrite. */
+function cloneJsonUpload(obj) {
+  if (obj == null || typeof obj !== 'object') return obj;
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    return obj;
+  }
+}
 
 /** @typedef {{ fileName: string; fileSizeBytes: number; parsedData: object; isDemo: boolean; parseMethod: string; extractionRatio: number | null; inferenceConfidence: string; inferenceReasons: string[]; inferenceScores: { pos: number; ecommerce: number; bank: number; reconciliation: number } }} LinkedPart */
 
@@ -54,26 +69,6 @@ function liveParseLooksUnreliable(parsedResult) {
   return issues.some((x) => risky.has(String(x)) || String(x).startsWith('formula_'));
 }
 
-function validateUploadFile(f, user, addToast) {
-  if (!f) return false;
-  if (f.size > 50 * 1024 * 1024) {
-    addToast({ type: 'error', title: 'File too large', message: 'Maximum file size is 50MB. Please compress or split the file.' });
-    return false;
-  }
-  const ext = f.name.split('.').pop()?.toLowerCase();
-  const allowed = ['pdf', 'csv', 'xlsx', 'xls', 'xlsm'];
-  const imgAllowed = ['jpg', 'jpeg', 'png'];
-  if (!allowed.includes(ext) && !(tierOk(user.tier, 'L1') && imgAllowed.includes(ext))) {
-    addToast({
-      type: 'error',
-      title: 'Not a statement',
-      message: PLEASE_UPLOAD_PROPER_BANK_STATEMENT,
-    });
-    return false;
-  }
-  return true;
-}
-
 export default function UploadPage() {
   const [uploadFlow, setUploadFlow] = useState('single');
   const [step, setStep] = useState(0);
@@ -104,38 +99,8 @@ export default function UploadPage() {
   const { addToast } = useToast();
   const router = useRouter();
 
-  const toastDemoReason = (apiResult, demoReason) => {
-    const reason = apiResult?.reason ?? demoReason;
-    if (reason === 'parser_unreachable') {
-      addToast({
-        type: 'error',
-        title: 'Parser not reachable',
-        message:
-          apiResult?.message ||
-          'The statement parser service is unavailable. On Vercel, set STATEMENT_PARSER_URL to your deployed API. Locally, run npm run parser (port 8000).',
-      });
-    } else if (reason === 'unsupported_file_kind') {
-      addToast({
-        type: 'error',
-        title: 'Not a statement',
-        message: PLEASE_UPLOAD_PROPER_BANK_STATEMENT,
-      });
-    } else if (reason === 'not_statement' || reason === 'unsupported_type') {
-      addToast({
-        type: 'error',
-        title: 'Not a statement',
-        message: PLEASE_UPLOAD_PROPER_BANK_STATEMENT,
-      });
-    } else {
-      addToast({
-        type: 'info',
-        title: 'Using demo analysis',
-        message: apiResult?.message || 'Live parse failed — showing sample data. Fix parser or upload CSV for best results.',
-      });
-    }
-  };
-
   const processFile = async (f) => {
+    if (!validateUploadFile(f, user, addToast)) return;
     if (parsingRef.current) return;
     parsingRef.current = true;
     setFile(f);
@@ -155,12 +120,17 @@ export default function UploadPage() {
       }
 
       if (r.isDemo) {
-        toastDemoReason(r.apiResult, r.demoReason);
+        if (handleParseDemoOutcome(r.apiResult, r.demoReason, addToast) === 'abort') {
+          setStep(0);
+          setFile(null);
+          return;
+        }
       }
 
       const now = new Date();
       const uploadDate = now.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-      const { parsedDataForStmt, finalData, apiResult, isDemo, parseMethod, fileTypeNorm, uploadKindDescription, ccy } = r;
+      const { parsedDataForStmt: rawPdForStmt, finalData, apiResult, isDemo, parseMethod, fileTypeNorm, uploadKindDescription, ccy } = r;
+      const parsedDataForStmt = cloneJsonUpload(rawPdForStmt) ?? rawPdForStmt;
 
       const sheetNames = await readWorkbookSheetNamesFromFile(f);
       const roleInf = inferStatementRole({
@@ -244,13 +214,16 @@ export default function UploadPage() {
         return;
       }
       if (r.isDemo) {
-        toastDemoReason(r.apiResult, r.demoReason);
+        if (handleParseDemoOutcome(r.apiResult, r.demoReason, addToast) === 'abort') {
+          return;
+        }
       }
 
+      const pdForSlot = cloneJsonUpload(r.parsedDataForStmt) ?? r.parsedDataForStmt;
       const inf = inferStatementRole({
         fileName: f.name,
         sheetNames,
-        parsedData: r.parsedDataForStmt,
+        parsedData: pdForSlot,
       });
 
       const maxScore = Math.max(
@@ -279,7 +252,7 @@ export default function UploadPage() {
         const part = {
           fileName: f.name,
           fileSizeBytes: typeof f.size === 'number' && f.size >= 0 ? f.size : 0,
-          parsedData: r.parsedDataForStmt,
+          parsedData: pdForSlot,
           isDemo: r.isDemo,
           parseMethod: r.parseMethod,
           extractionRatio: r.apiResult?.success ? (r.apiResult?.extraction_ratio ?? null) : null,
@@ -359,6 +332,7 @@ export default function UploadPage() {
           ? { reconciliation: { fileName: reconciliation.fileName, parsedData: reconciliation.parsedData } }
           : {}),
       });
+      mergedPd = cloneJsonUpload(mergedPd) ?? mergedPd;
     } catch (e) {
       addToast({ type: 'error', title: 'Could not merge', message: String(e) });
       return;
@@ -437,16 +411,38 @@ export default function UploadPage() {
       'statement';
     const chosenBytes =
       typeof f?.size === 'number' && f.size >= 0 ? f.size : Number(parsedResult.fileSizeBytes) || 0;
+
+    let fileSha256;
+    try {
+      if (f && !parsedResult.linkedSourceFiles?.length && globalThis.crypto?.subtle) {
+        const buf = await f.arrayBuffer();
+        const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', buf);
+        fileSha256 = Array.from(new Uint8Array(hashBuffer))
+          .map((x) => x.toString(16).padStart(2, '0'))
+          .join('');
+      }
+    } catch {
+      /* optional hash for server dedup */
+    }
+
     const payload = JSON.parse(
       JSON.stringify({
         ...parsedResult,
         fileName: chosenName,
         fileSizeBytes: chosenBytes,
+        ...(fileSha256 ? { fileSha256 } : {}),
         parsedData: m?.parsedData ?? parsedResult.parsedData,
       }),
     );
     const save = await addStatement(payload);
-    if (!save.savedToServer) {
+    if (save.duplicate) {
+      addToast({
+        type: 'info',
+        title: 'Already saved in your account',
+        message:
+          'The server found the same file or the same acquirer and billing period in your database. You are viewing the existing saved statement.',
+      });
+    } else if (!save.savedToServer) {
       addToast({
         type: 'warning',
         title: 'Not saved to your account',
@@ -454,6 +450,7 @@ export default function UploadPage() {
           save.message ||
           'Sign in again from the login page so statements persist to the database.',
       });
+      return;
     }
     router.push('/report');
   };
@@ -549,7 +546,7 @@ export default function UploadPage() {
 
       {uploadFlow === 'linked' && step === 0 && (
         <Disclaimer tone="info">
-          Add your three required files in <span className="font-medium text-ink-600">any order</span> (or drop many at once). Optionally add a{' '}
+          Add your three required files in <span className="font-medium text-ink-600">any order</span> (or drop many at once). Use payment-related PDF, CSV, Excel, or clear scans only (see accepted types on the uploader). Optionally add a{' '}
           <span className="font-medium text-ink-600">reconciliation workbook</span> (expected inflows vs actual bank credits). We detect POS, e-commerce, bank, or reconciliation from the name, tabs, and parsed fields.
         </Disclaimer>
       )}
@@ -569,7 +566,7 @@ export default function UploadPage() {
               ref={fileInputRef}
               type="file"
               className="hidden"
-              accept={tierOk(user.tier, 'L1') ? '.pdf,.csv,.xlsx,.xls,.jpg,.jpeg,.png' : '.pdf,.csv,.xlsx,.xls'}
+              accept={PAYMENT_FILE_INPUT_ACCEPT}
               onChange={(e) => handleFileSelect(e.target.files?.[0])}
             />
             <div className="w-14 h-14 mx-auto rounded-full bg-ink text-cream flex items-center justify-center mb-5">
@@ -577,8 +574,7 @@ export default function UploadPage() {
             </div>
             <h3 className="font-serif text-3xl leading-tight">Drag & drop your statement</h3>
             <p className="text-ink-500 text-[13px] mt-2">
-              PDF, CSV, XLSX · up to 50MB
-              {tierOk(user.tier, 'L1') ? ' · JPG/PNG (OCR)' : ''}
+              PDF, CSV, Excel, payment scans (JPEG, PNG, WebP, TIFF, …) · payment-related files only · up to 50MB
               {tierOk(user.tier, 'L2') ? ' · Bulk upload' : ''}
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
@@ -621,7 +617,7 @@ export default function UploadPage() {
                 type="file"
                 multiple
                 className="hidden"
-                accept={tierOk(user.tier, 'L1') ? '.pdf,.csv,.xlsx,.xls,.jpg,.jpeg,.png' : '.pdf,.csv,.xlsx,.xls'}
+                accept={PAYMENT_FILE_INPUT_ACCEPT}
                 onChange={async (e) => {
                   const files = e.target.files ? [...e.target.files] : [];
                   e.target.value = '';

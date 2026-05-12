@@ -84,6 +84,8 @@ model Statement {
   acquirerName          String?   @map("acquirer_name")
   billingPeriodFrom     DateTime? @map("billing_period_from") @db.Date
   billingPeriodTo       DateTime? @map("billing_period_to") @db.Date
+  /** When this row was saved (upload order). Used so lists/report default to the newest upload, not newest billing month. */
+  uploadedAt            DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   parseStatus           String    @default("queued") @map("parse_status") @db.VarChar(30)
   idempotencyKey        String    @unique @map("idempotency_key") @db.Uuid
 
@@ -94,6 +96,7 @@ model Statement {
   @@index([userId])
   @@index([parseStatus])
   @@index([userId, billingPeriodFrom])
+  @@index([userId, uploadedAt])
   @@map("statements")
   @@schema("statement")
 }

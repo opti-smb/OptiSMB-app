@@ -3,7 +3,20 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { mockSavedScenarios } from '@/lib/mockData';
 import { generateId } from '@/lib/utils';
 
+/** Break shared references before React state / API (avoids the next parse mutating a prior statement). */
+function cloneJsonSafe(obj) {
+  if (obj == null || typeof obj !== 'object') return obj;
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    return obj;
+  }
+}
+
 const NOTIFICATIONS_CAP = 50;
+
+/** Statement list must always hit the server (no stale cache after POST). */
+const STATEMENTS_FETCH = { credentials: 'include', cache: 'no-store' };
 
 /** Per-account notification store (survives logout on this browser). */
 const NOTIFICATIONS_LS_PREFIX = 'optismb_in_app_notifications:';
@@ -130,6 +143,11 @@ export function AppProvider({ children }) {
   useEffect(() => {
     inAppNotificationsRef.current = inAppNotifications;
   }, [inAppNotifications]);
+
+  const currentStatementIdRef = useRef(null);
+  useEffect(() => {
+    currentStatementIdRef.current = currentStatementId;
+  }, [currentStatementId]);
 
   /** Scenarios / review queue / onboarding — not tied to notification persistence */
   const clearEphemeralClientState = useCallback(() => {
@@ -264,7 +282,7 @@ export function AppProvider({ children }) {
         setInAppNotifications(readPersistedNotifications(j.userId, null));
         if (j.user) setUser((prev) => mergeUserFromApi(j.user, sameSession ? prev : defaultUser));
         setIsAuthenticated(true);
-        const st = await fetch('/api/statements', { credentials: 'include' });
+        const st = await fetch('/api/statements', STATEMENTS_FETCH);
         if (cancelled) return;
         if (!st.ok) {
           setStatements([]);
@@ -316,7 +334,7 @@ export function AppProvider({ children }) {
   }, [inAppNotifications, serverUserId, demoIdentityEmail, isAuthenticated, hydrated]);
 
   /**
-   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string }>}
+   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string; error?: string }>}
    * `demo: true` only when the server has no DATABASE_URL (local-only mode).
    */
   const login = async ({ email }) => {
@@ -325,7 +343,7 @@ export function AppProvider({ children }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ intent: 'login', email }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -337,7 +355,7 @@ export function AppProvider({ children }) {
         setInAppNotifications(readPersistedNotifications(body.userId, null));
         if (body.user) setUser((prev) => mergeUserFromApi(body.user, sameSession ? prev : defaultUser));
         setIsAuthenticated(true);
-        const stRes = await fetch('/api/statements', { credentials: 'include' });
+        const stRes = await fetch('/api/statements', STATEMENTS_FETCH);
         if (stRes.ok) {
           const sj = await stRes.json();
           if (Array.isArray(sj.statements)) {
@@ -349,6 +367,15 @@ export function AppProvider({ children }) {
           setCurrentStatementId(null);
         }
         return { ok: true, demo: false };
+      }
+      if (body.error === 'no_account') {
+        return {
+          ok: false,
+          error: 'no_account',
+          message:
+            body.message ||
+            "We don't have an account for this email yet. Create one on the Register page, then sign in here.",
+        };
       }
       if (body.error === 'database_not_configured') {
         const norm = String(email).trim().toLowerCase();
@@ -376,6 +403,7 @@ export function AppProvider({ children }) {
       }
       return {
         ok: false,
+        error: typeof body.error === 'string' ? body.error : undefined,
         message:
           body.message ||
           (typeof body.error === 'string' ? String(body.error).replace(/_/g, ' ') : '') ||
@@ -414,7 +442,7 @@ export function AppProvider({ children }) {
   };
 
   /**
-   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string }>}
+   * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string; error?: string }>}
    */
   const register = async (data) => {
     try {
@@ -423,6 +451,7 @@ export function AppProvider({ children }) {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
+          intent: 'register',
           email: data.email,
           businessName: data.business || data.name,
           industry: data.industry,
@@ -452,7 +481,7 @@ export function AppProvider({ children }) {
         }
         setIsAuthenticated(true);
         setOnboardingDone(false);
-        const stRes = await fetch('/api/statements', { credentials: 'include' });
+        const stRes = await fetch('/api/statements', STATEMENTS_FETCH);
         if (stRes.ok) {
           const sj = await stRes.json();
           if (Array.isArray(sj.statements)) {
@@ -464,6 +493,15 @@ export function AppProvider({ children }) {
           setCurrentStatementId(null);
         }
         return { ok: true, demo: false };
+      }
+      if (body.error === 'email_already_registered' || res.status === 409) {
+        return {
+          ok: false,
+          error: 'email_already_registered',
+          message:
+            body.message ||
+            'This email is already registered. Use Sign in with the same address instead of creating another account.',
+        };
       }
       if (body.error === 'database_not_configured') {
         const norm = String(data.email || '').trim().toLowerCase();
@@ -493,6 +531,7 @@ export function AppProvider({ children }) {
       }
       return {
         ok: false,
+        error: typeof body.error === 'string' ? body.error : undefined,
         message:
           body.message ||
           (typeof body.error === 'string' ? String(body.error).replace(/_/g, ' ') : '') ||
@@ -516,25 +555,34 @@ export function AppProvider({ children }) {
   const getCurrentStatement = () =>
     statements.find(s => s.id === currentStatementId) || statements[0];
 
-  /** Same acquirer and billing period as an existing statement. */
-  const isDuplicate = (acquirer, period) =>
-    statements.some((s) => s.acquirer === acquirer && s.period === period);
-
   /**
-   * @returns {Promise<{ id: string; savedToServer: boolean; message?: string }>}
+   * @returns {Promise<{ id: string; savedToServer: boolean; duplicate?: boolean; message?: string }>}
    */
   const addStatement = async (stmt) => {
+    const idBeforeOptimistic = currentStatementIdRef.current;
+    const base = cloneJsonSafe(stmt);
+    const stmtSnap = base && typeof base === 'object' ? base : stmt;
     const tempId = generateId();
-    const full = { ...stmt, id: tempId };
+    const full = { ...stmtSnap, id: tempId };
+
+    const revertOptimistic = () => {
+      setStatements((prev) => prev.filter((s) => s.id !== tempId));
+      setHumanReviewQueue((prev) => prev.filter((r) => r.statementId !== tempId));
+      setCurrentStatementId((cur) => {
+        if (cur !== tempId) return cur;
+        return idBeforeOptimistic != null && idBeforeOptimistic !== tempId ? idBeforeOptimistic : null;
+      });
+    };
+
     setStatements((prev) => [full, ...prev]);
     setCurrentStatementId(tempId);
 
     // Route to human review if parsing confidence < 60% (low = simulated <60%)
-    if (stmt.parsingConfidence === 'low') {
+    if (stmtSnap.parsingConfidence === 'low') {
       const reviewItem = {
         id: 'rev-' + tempId,
         statementId: tempId,
-        fileName: stmt.fileName,
+        fileName: stmtSnap.fileName,
         submittedAt: new Date().toISOString(),
         status: 'pending',
         estimatedCompletion: '4 business hours',
@@ -544,18 +592,18 @@ export function AppProvider({ children }) {
 
     // Simulate email notification
     if (user.notifyParseComplete) {
-      simulateEmail('parse_complete', stmt);
+      simulateEmail('parse_complete', stmtSnap);
     }
 
     const pushParseInApp = (finalId, savedToServer) => {
       const suffix =
-        stmt.parsingConfidence === 'low'
+        stmtSnap.parsingConfidence === 'low'
           ? ' — flagged for human review.'
           : '';
       pushNotification({
         kind: 'statement_parse',
         title: savedToServer ? 'Statement saved' : 'Statement added (this device)',
-        body: `${stmt.fileName || 'Statement'} · ${stmt.acquirer || 'Acquirer'}${suffix}`,
+        body: `${stmtSnap.fileName || 'Statement'} · ${stmtSnap.acquirer || 'Acquirer'}${suffix}`,
         href: '/report',
         statementId: finalId,
       });
@@ -565,56 +613,81 @@ export function AppProvider({ children }) {
       const { id: _omit, ...stmtForApi } = full;
       const res = await fetch('/api/statements', {
         method: 'POST',
-        credentials: 'include',
+        ...STATEMENTS_FETCH,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(stmtForApi),
       });
       if (res.ok) {
         const j = await res.json();
-        if (j.statement?.id) {
-          setStatements((prev) => prev.map((s) => (s.id === tempId ? j.statement : s)));
-          setCurrentStatementId(j.statement.id);
-          setHumanReviewQueue((prev) =>
-            prev.map((r) => (r.statementId === tempId ? { ...r, statementId: j.statement.id } : r)),
-          );
-          pushParseInApp(j.statement.id, true);
-          return { id: j.statement.id, savedToServer: true };
+        if (!j.statement?.id) {
+          revertOptimistic();
+          pushParseInApp(tempId, false);
+          return {
+            id: tempId,
+            savedToServer: false,
+            message: 'Server did not return a saved statement id.',
+          };
         }
-        pushParseInApp(tempId, false);
-        return {
-          id: tempId,
-          savedToServer: false,
-          message: 'Server did not return a saved statement id.',
-        };
-      } else {
-        let msg;
-        try {
-          const errBody = await res.json();
-          msg = errBody.message || errBody.error;
-        } catch {
-          /* ignore */
-        }
-        pushParseInApp(tempId, false);
-        return {
-          id: tempId,
-          savedToServer: false,
-          message:
-            msg ||
-            (res.status === 401
-              ? 'Not signed in — sign in again so statements save to your account.'
-              : `Save failed (${res.status}).`),
-        };
-      }
-    } catch {
-      /* DATABASE_URL unset or offline */
-    }
+        const savedId = j.statement.id;
+        const isDup = !!j.duplicate;
 
-    pushParseInApp(tempId, false);
-    return {
-      id: tempId,
-      savedToServer: false,
-      message: 'Could not reach the server to save this statement.',
-    };
+        setHumanReviewQueue((prev) =>
+          isDup
+            ? prev.filter((r) => r.statementId !== tempId)
+            : prev.map((r) => (r.statementId === tempId ? { ...r, statementId: savedId } : r)),
+        );
+
+        let serverList = null;
+        try {
+          const st = await fetch('/api/statements', STATEMENTS_FETCH);
+          if (st.ok) {
+            const sj = await st.json();
+            if (Array.isArray(sj.statements)) serverList = sj.statements;
+          }
+        } catch {
+          /* use merge fallback */
+        }
+        if (serverList?.length) {
+          setStatements(serverList);
+        } else {
+          setStatements((prev) => {
+            const withoutTemp = prev.filter((s) => s.id !== tempId);
+            if (withoutTemp.some((s) => s && s.id === savedId)) return withoutTemp;
+            return [j.statement, ...withoutTemp];
+          });
+        }
+        setCurrentStatementId(savedId);
+        if (!isDup) {
+          pushParseInApp(savedId, true);
+        }
+        return { id: savedId, savedToServer: true, duplicate: isDup };
+      }
+      let msg;
+      try {
+        const errBody = await res.json();
+        msg = errBody.message || errBody.error;
+      } catch {
+        /* ignore */
+      }
+      revertOptimistic();
+      pushParseInApp(tempId, false);
+      return {
+        id: tempId,
+        savedToServer: false,
+        message:
+          msg ||
+          (res.status === 401
+            ? 'Not signed in — sign in again so statements save to your account.'
+            : `Save failed (${res.status}).`),
+      };
+    } catch {
+      revertOptimistic();
+      return {
+        id: tempId,
+        savedToServer: false,
+        message: 'Could not reach the server to save this statement.',
+      };
+    }
   };
 
   const simulateEmail = (type, data) => {
@@ -717,7 +790,6 @@ export function AppProvider({ children }) {
       getCurrentStatement, addStatement, updateStatement, deleteStatement,
       setCurrentStatementId,
       saveScenario, deleteScenario,
-      isDuplicate,
       exportUserData,
       deleteAccount,
     }}>
