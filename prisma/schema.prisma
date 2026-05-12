@@ -35,6 +35,8 @@ model User {
   /// AES-GCM ciphertext for login email (lookup uses `email_hash`).
   emailCiphertext         Bytes     @map("email_ciphertext")
   emailHash               String    @unique @map("email_hash") @db.Char(64)
+  /// bcrypt hash of account password (never store plaintext).
+  passwordHash            String?   @map("password_hash") @db.VarChar(72)
   businessNameCiphertext  Bytes?    @map("business_name_ciphertext")
   industry                String?   @db.VarChar(100)
   country                 String?   @db.Char(2)

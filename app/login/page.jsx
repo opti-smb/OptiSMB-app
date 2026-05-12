@@ -60,7 +60,7 @@ function SSO() {
 }
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('owner@horizonretail.com');
+  const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useApp();
@@ -69,15 +69,21 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     if (!email) { addToast({ type: 'error', title: 'Email required' }); return; }
+    if (!pw || pw.length < 1) {
+      addToast({ type: 'error', title: 'Password required', message: 'Enter the password for this account.' });
+      return;
+    }
     setLoading(true);
     await new Promise(r => setTimeout(r, 600));
-    const result = await login({ email });
+    const result = await login({ email, password: pw });
     setLoading(false);
     if (!result.ok) {
       const title =
         result.error === 'no_account'
           ? 'No account for this email'
-          : 'Could not sign in';
+          : result.error === 'invalid_credentials'
+            ? 'Sign in failed'
+            : 'Could not sign in';
       addToast({
         type: 'error',
         title,

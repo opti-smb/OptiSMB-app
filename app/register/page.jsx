@@ -48,6 +48,7 @@ const VOLUMES = ['< $50k', '$50k – $250k', '$250k – $1M', '$1M+'];
 export default function RegisterPage() {
   const [step, setStep] = useState(0);
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [biz, setBiz] = useState('');
   const [industry, setIndustry] = useState('Fashion & apparel');
   const [country, setCountry] = useState('United States');
@@ -62,6 +63,10 @@ export default function RegisterPage() {
   const next = async () => {
     if (step === 0) {
       if (!email) { addToast({ type: 'error', title: 'Email required' }); return; }
+      if (!password || password.length < 10) {
+        addToast({ type: 'error', title: 'Password too short', message: 'Use at least 10 characters.' });
+        return;
+      }
       if (!agreed) { addToast({ type: 'error', title: 'Please accept the terms' }); return; }
       setStep(1);
     } else if (step === 1) {
@@ -70,7 +75,15 @@ export default function RegisterPage() {
       if (!biz) { addToast({ type: 'error', title: 'Business name required' }); return; }
       setLoading(true);
       await new Promise(r => setTimeout(r, 500));
-      const result = await register({ email, business: biz, name: biz, industry, country, monthlyVolume: volume });
+      const result = await register({
+        email,
+        password,
+        business: biz,
+        name: biz,
+        industry,
+        country,
+        monthlyVolume: volume,
+      });
       setLoading(false);
       if (!result.ok) {
         const title =
@@ -124,7 +137,9 @@ export default function RegisterPage() {
           </div>
           <div className="space-y-4">
             <Field label="Work email"><Input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@company.com" /></Field>
-            <Field label="Password" hint="10 characters minimum"><Input type="password" placeholder="••••••••••" /></Field>
+            <Field label="Password" hint="10 characters minimum">
+              <Input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••••" />
+            </Field>
             <label className="flex items-start gap-2 text-[12px] text-ink-500 cursor-pointer">
               <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="mt-0.5" />
               I agree to OptiSMB's Terms and acknowledge the Privacy Policy. No financial advice is provided.

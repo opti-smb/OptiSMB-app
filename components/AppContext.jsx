@@ -337,13 +337,13 @@ export function AppProvider({ children }) {
    * @returns {Promise<{ ok: boolean; demo?: boolean; message?: string; error?: string }>}
    * `demo: true` only when the server has no DATABASE_URL (local-only mode).
    */
-  const login = async ({ email }) => {
+  const login = async ({ email, password }) => {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ intent: 'login', email }),
+        body: JSON.stringify({ intent: 'login', email, password }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -375,6 +375,29 @@ export function AppProvider({ children }) {
           message:
             body.message ||
             "We don't have an account for this email yet. Create one on the Register page, then sign in here.",
+        };
+      }
+      if (body.error === 'invalid_credentials' || res.status === 401) {
+        return {
+          ok: false,
+          error: 'invalid_credentials',
+          message: body.message || 'Invalid email or password.',
+        };
+      }
+      if (body.error === 'password_required' || body.error === 'weak_password') {
+        return {
+          ok: false,
+          error: body.error,
+          message: body.message || 'Check your password and try again.',
+        };
+      }
+      if (body.error === 'password_not_set') {
+        return {
+          ok: false,
+          error: 'password_not_set',
+          message:
+            body.message ||
+            'This account needs a password reset. Contact support or use Forgot password when available.',
         };
       }
       if (body.error === 'database_not_configured') {
@@ -453,6 +476,7 @@ export function AppProvider({ children }) {
         body: JSON.stringify({
           intent: 'register',
           email: data.email,
+          password: data.password,
           businessName: data.business || data.name,
           industry: data.industry,
           country: data.country,
@@ -501,6 +525,13 @@ export function AppProvider({ children }) {
           message:
             body.message ||
             'This email is already registered. Use Sign in with the same address instead of creating another account.',
+        };
+      }
+      if (body.error === 'weak_password' || body.error === 'password_required' || body.error === 'password_too_long') {
+        return {
+          ok: false,
+          error: body.error,
+          message: body.message || 'Choose a stronger password (at least 10 characters).',
         };
       }
       if (body.error === 'database_not_configured') {
