@@ -48,6 +48,7 @@ export async function POST(request) {
         country: countryLabel ?? undefined,
         tier: user.tier,
         monthlyVolume: body?.monthlyVolume,
+        roles: Array.isArray(user.roles) ? user.roles : ['user'],
       },
     });
     setSessionCookie(res, user.userId);

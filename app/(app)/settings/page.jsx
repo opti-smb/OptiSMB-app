@@ -44,6 +44,7 @@ export default function SettingsPage() {
             industry: j.user.industry ?? industry,
             country: j.user.country ?? country,
             tier: j.user.tier ?? user.tier,
+            roles: Array.isArray(j.user.roles) ? j.user.roles : user.roles,
           });
         }
         addToast({ type: 'success', title: 'Profile saved', message: 'Your account has been updated.' });

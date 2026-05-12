@@ -3,6 +3,7 @@
     "baseUrl": ".",
     "paths": {
       "@/lib/prisma.js": ["./lib/prisma.js"],
+      "@/lib/server/*": ["./lib/server/*"],
       "@/lib/*": ["./services/statement-js-lib/lib/*"],
       "@/*": ["./*"]
     }

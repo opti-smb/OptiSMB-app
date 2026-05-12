@@ -54,6 +54,7 @@ export async function PATCH(request) {
         industry: user.industry ?? undefined,
         country: user.country ?? undefined,
         tier: user.tier,
+        roles: Array.isArray(user.roles) ? user.roles : ['user'],
       },
     });
   } catch (e) {

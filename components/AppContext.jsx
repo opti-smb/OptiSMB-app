@@ -1,7 +1,14 @@
 'use client';
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { mockSavedScenarios } from '@/lib/mockData';
 import { generateId } from '@/lib/utils';
+
+const NOTIFICATIONS_CAP = 50;
+
+function newNotificationId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `n-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 const AppContext = createContext(null);
 
@@ -19,6 +26,7 @@ const defaultUser = {
   notifyParseComplete: true,
   notifyReportReady: true,
   t3DataConsent: false,
+  roles: [],
 };
 
 function mergeUserFromApi(apiUser, prev) {
@@ -37,6 +45,7 @@ function mergeUserFromApi(apiUser, prev) {
     name: biz || prev.name,
     business: biz || prev.business,
     initials,
+    roles: Array.isArray(apiUser.roles) ? apiUser.roles : prev.roles || [],
   };
 }
 
@@ -49,6 +58,40 @@ export function AppProvider({ children }) {
   const [hydrated, setHydrated] = useState(false);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [humanReviewQueue, setHumanReviewQueue] = useState([]);
+  const [inAppNotifications, setInAppNotifications] = useState([]);
+
+  const pushNotification = useCallback((item) => {
+    const row = {
+      id: newNotificationId(),
+      read: false,
+      createdAt: new Date().toISOString(),
+      kind: item.kind || 'info',
+      title: String(item.title || 'Update'),
+      body: item.body != null ? String(item.body) : '',
+      href: item.href || null,
+      statementId: item.statementId != null ? String(item.statementId) : null,
+    };
+    setInAppNotifications((prev) => [row, ...prev].slice(0, NOTIFICATIONS_CAP));
+  }, []);
+
+  const markNotificationRead = useCallback((id) => {
+    setInAppNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
+    );
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setInAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  }, []);
+
+  const dismissNotification = useCallback((id) => {
+    setInAppNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  const unreadNotificationCount = useMemo(
+    () => inAppNotifications.filter((n) => !n.read).length,
+    [inAppNotifications],
+  );
 
   useEffect(() => {
     try {
@@ -60,6 +103,13 @@ export function AppProvider({ children }) {
         if (s.savedScenarios) setSavedScenarios(s.savedScenarios);
         if (s.onboardingDone !== undefined) setOnboardingDone(s.onboardingDone);
         if (s.humanReviewQueue) setHumanReviewQueue(s.humanReviewQueue);
+        if (Array.isArray(s.inAppNotifications)) {
+          setInAppNotifications(
+            s.inAppNotifications.filter(
+              (n) => n && typeof n === 'object' && n.id && n.title,
+            ),
+          );
+        }
       }
     } catch {}
     setHydrated(true);
@@ -106,12 +156,13 @@ export function AppProvider({ children }) {
     if (!hydrated) return;
     try {
       localStorage.setItem('smb_state', JSON.stringify({
-        _v: 2,
+        _v: 3,
         isAuthenticated, user,
         savedScenarios, onboardingDone, humanReviewQueue,
+        inAppNotifications,
       }));
     } catch {}
-  }, [isAuthenticated, user, savedScenarios, onboardingDone, humanReviewQueue, hydrated]);
+  }, [isAuthenticated, user, savedScenarios, onboardingDone, humanReviewQueue, inAppNotifications, hydrated]);
 
   const login = async ({ email }) => {
     try {
@@ -258,6 +309,20 @@ export function AppProvider({ children }) {
       simulateEmail('parse_complete', stmt);
     }
 
+    const pushParseInApp = (finalId, savedToServer) => {
+      const suffix =
+        stmt.parsingConfidence === 'low'
+          ? ' — flagged for human review.'
+          : '';
+      pushNotification({
+        kind: 'statement_parse',
+        title: savedToServer ? 'Statement saved' : 'Statement added (this device)',
+        body: `${stmt.fileName || 'Statement'} · ${stmt.acquirer || 'Acquirer'}${suffix}`,
+        href: '/report',
+        statementId: finalId,
+      });
+    };
+
     try {
       const { id: _omit, ...stmtForApi } = full;
       const res = await fetch('/api/statements', {
@@ -274,6 +339,7 @@ export function AppProvider({ children }) {
           setHumanReviewQueue((prev) =>
             prev.map((r) => (r.statementId === tempId ? { ...r, statementId: j.statement.id } : r)),
           );
+          pushParseInApp(j.statement.id, true);
           return j.statement.id;
         }
       }
@@ -281,6 +347,7 @@ export function AppProvider({ children }) {
       /* DATABASE_URL unset or offline */
     }
 
+    pushParseInApp(tempId, false);
     return tempId;
   };
 
@@ -314,6 +381,7 @@ export function AppProvider({ children }) {
       return next;
     });
     setHumanReviewQueue((prev) => prev.filter((r) => r.statementId !== id));
+    setInAppNotifications((prev) => prev.filter((n) => n.statementId !== id));
   };
 
   const saveScenario = (scenario) => {
@@ -351,6 +419,7 @@ export function AppProvider({ children }) {
     setStatements([]);
     setSavedScenarios([]);
     setHumanReviewQueue([]);
+    setInAppNotifications([]);
     setOnboardingDone(false);
     setCurrentStatementId(null);
     setIsAuthenticated(false);
@@ -367,6 +436,8 @@ export function AppProvider({ children }) {
       isAuthenticated, user, statements, currentStatementId,
       savedScenarios, hydrated,
       onboardingDone, humanReviewQueue,
+      inAppNotifications, unreadNotificationCount,
+      pushNotification, markNotificationRead, markAllNotificationsRead, dismissNotification,
       login, logout, register, updateUser, updateTier,
       completeOnboarding,
       getCurrentStatement, addStatement, updateStatement, deleteStatement,

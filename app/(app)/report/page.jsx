@@ -57,8 +57,6 @@ import {
   buildPosSpotlightReportUi,
   getEcommerceStatementOrderMetrics,
   buildEcomOrderUploadMetricsUi,
-  pickPosTransactionArrays,
-  aggregatePosPaymentLabelsFromPosTxnRows,
 } from '@/lib/posBatchCommissionAnalysis';
 import { getBankStatementPosEcomChargeSummary } from '@/lib/bankStatementChannelSplit';
 import { reportSectionSlug, slugifyReportHeading } from '@/lib/reportSlugs';
@@ -913,6 +911,15 @@ function buildQaSuggestions(pd) {
   return [...new Set(out)].slice(0, 6);
 }
 
+/** Highest-commission spotlight tables must not surface processor copy that reads as gross / volume ("total charge amount"). */
+const RE_TOTAL_CHARGE_AMOUNT_LABEL = /\btotal\s+charge(?:\s+amount)?\b|\bcharge\s+amount\b/i;
+
+function commissionSpotlightTableHeader(label, fallback) {
+  if (typeof label !== 'string' || !label.trim()) return fallback;
+  const t = label.trim();
+  return RE_TOTAL_CHARGE_AMOUNT_LABEL.test(t) ? fallback : t;
+}
+
 /** POS / e‑com gross vs bank-side credits (Discrepancy tab — below highest-commission spotlights). */
 function GrossVsBankChannelTable({
   summary,
@@ -1114,10 +1121,6 @@ function TabDiscrepancy({ stmt, statementModel, peerStatementsForSummary = [] })
   const ecomSpotlightUi = useMemo(() => buildEcomSpotlightReportUi(d, ecomSpotlight), [d, ecomSpotlight]);
   const ecomOrderMetrics = useMemo(() => (d ? getEcommerceStatementOrderMetrics(d) : null), [d]);
   const ecomOrderMetricsUi = useMemo(() => (d ? buildEcomOrderUploadMetricsUi(d) : null), [d]);
-  const posCardPaymentLabels = useMemo(
-    () => (d ? aggregatePosPaymentLabelsFromPosTxnRows(pickPosTransactionArrays(d)) : []),
-    [d],
-  );
   /** Passed into bank summary so Net Bank / allocation math stays aligned with {@link getRevenueByChannelPosEcom} (Channel Split tab uses the same roll-up). */
   const channelGrossBankSummary = useMemo(
     () => (d ? getBankStatementPosEcomChargeSummary(d, revenue ?? undefined) : null),
@@ -1174,6 +1177,23 @@ function TabDiscrepancy({ stmt, statementModel, peerStatementsForSummary = [] })
       ? true
       : posSpotlightEffective.impliedPct != null && Number.isFinite(Number(posSpotlightEffective.impliedPct)));
   const fmt = (n) => (n != null && Number.isFinite(Number(n)) ? formatMoney(Number(n), displayCcy) : '—');
+  const posBatchOrderDisplay =
+    showPosSpotlightSummaryTable && posSpotlightEffective
+      ? (() => {
+          const p = posSpotlightEffective;
+          const b = p?.batchId != null && String(p.batchId).trim() ? String(p.batchId).trim() : '';
+          const o = p?.orderOrTxnId != null && String(p.orderOrTxnId).trim() ? String(p.orderOrTxnId).trim() : '';
+          if (p?.transactionLine && o) return o + (b && b !== '—' && b !== o ? ` · ${b}` : '');
+          return b || o || '—';
+        })()
+      : '—';
+  const hasPosCommissionTable = Boolean(
+    showPosSpotlightSummaryTable && posSpotlightTableUi && posSpotlightEffective,
+  );
+  const hasEcomCommissionTable = Boolean(
+    (ecomSpotlight && ecomSpotlightUi) || (ecomOrderMetrics?.highest && ecomOrderMetricsUi),
+  );
+  const showCommissionsSpotlightSection = hasPosCommissionTable || hasEcomCommissionTable;
 
   return (
     <div className="space-y-6">
@@ -1279,176 +1299,130 @@ function TabDiscrepancy({ stmt, statementModel, peerStatementsForSummary = [] })
         ) : null}
       </ReportCard>
 
-      {(ecomSpotlight && ecomSpotlightUi) ||
-      showPosSpotlightSummaryTable ||
-      (ecomOrderMetrics && ecomOrderMetricsUi) ? (
+      {showCommissionsSpotlightSection ? (
         <ReportCard id={reportSectionSlug('discrepancy', 'commissions')} className="p-6 md:p-8 overflow-x-auto">
-          <div className="space-y-10 max-w-5xl">
-            {(ecomSpotlight && ecomSpotlightUi) || showPosSpotlightSummaryTable || (ecomOrderMetrics && ecomOrderMetricsUi) ? (
-              <>
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {(ecomSpotlight && ecomSpotlightUi) || (ecomOrderMetrics && ecomOrderMetricsUi) ? (
-                    <div className="space-y-4 min-w-0">
-                      {ecomSpotlight && ecomSpotlightUi ? (
-                        <div className="rounded-xl border border-ink/10 bg-cream-100/35 p-5">
-                          <div className="smallcaps text-ink-400 text-[11px] tracking-wide mb-1">E-commerce</div>
-                          <div className="font-serif text-lg text-ink mb-3">{ecomSpotlightUi.spotlightSectionTitle}</div>
-                          <dl className="space-y-0 text-[13px] text-ink-600">
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomSpotlightUi.primaryIdLabel}</dt>
-                              <dd className="font-mono text-right text-ink text-[12px] leading-snug break-all max-w-[min(100%,18rem)]">
-                                {ecomSpotlight.primaryId != null && String(ecomSpotlight.primaryId).trim()
-                                  ? String(ecomSpotlight.primaryId).trim()
-                                  : '—'}
-                              </dd>
-                            </div>
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomSpotlightUi.commissionLabel}</dt>
-                              <dd className="font-mono tabular text-right">
-                                {ecomSpotlight.commission != null && Number.isFinite(Number(ecomSpotlight.commission))
-                                  ? fmt(Number(ecomSpotlight.commission))
-                                  : '—'}
-                              </dd>
-                            </div>
-                            <div className="flex justify-between gap-4 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomSpotlightUi.impliedPctLabel}</dt>
-                              <dd className="font-mono tabular text-right">
-                                {ecomSpotlight.impliedPct != null && Number.isFinite(Number(ecomSpotlight.impliedPct))
-                                  ? `${Number(ecomSpotlight.impliedPct).toFixed(2)}%`
-                                  : '—'}
-                              </dd>
-                            </div>
-                          </dl>
-                        </div>
-                      ) : null}
-                      {ecomOrderMetrics && ecomOrderMetricsUi ? (
-                        <div className="rounded-xl border border-ink/10 bg-cream-100/35 p-5">
-                          <div className="smallcaps text-ink-400 text-[11px] tracking-wide mb-1">E-commerce</div>
-                          <div className="font-serif text-lg text-ink mb-2">{ecomOrderMetricsUi.blockTitle}</div>
-                          <p className="text-[11px] text-ink-400 leading-relaxed mb-3">{ecomOrderMetricsUi.footnote}</p>
-                          <dl className="space-y-0 text-[13px] text-ink-600">
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.totalGrossLabel}</dt>
-                              <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.totalGross)}</dd>
-                            </div>
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.totalFeesLabel}</dt>
-                              <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.totalFees)}</dd>
-                            </div>
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.deductionsLabel}</dt>
-                              <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.totalDeductions)}</dd>
-                            </div>
-                            <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                              <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.netLabel}</dt>
-                              <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.computedNet)}</dd>
-                            </div>
-                            {ecomOrderMetrics.netFromRows != null ? (
-                              <div className="flex justify-between gap-4 py-2.5">
-                                <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.netFromFileLabel}</dt>
-                                <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.netFromRows)}</dd>
-                              </div>
-                            ) : null}
-                            {ecomOrderMetrics.highest && !ecomSpotlight ? (
-                              <>
-                                <div className="pt-3 mt-1 text-[12px] text-ink-500">{ecomOrderMetricsUi.highestFeeLabel}</div>
-                                <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                                  <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.highestOrderLabel}</dt>
-                                  <dd className="font-mono text-right text-[12px] break-all max-w-[min(100%,16rem)]">
-                                    {ecomOrderMetrics.highest.orderId}
-                                  </dd>
-                                </div>
-                                <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                                  <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.highestAmountLabel}</dt>
-                                  <dd className="font-mono tabular text-right">{fmt(ecomOrderMetrics.highest.fee)}</dd>
-                                </div>
-                                <div className="flex justify-between gap-4 py-2.5">
-                                  <dt className="text-ink-500 shrink-0">{ecomOrderMetricsUi.highestPctLabel}</dt>
-                                  <dd className="font-mono tabular text-right">
-                                    {ecomOrderMetrics.highest.impliedPct != null
-                                      ? `${Number(ecomOrderMetrics.highest.impliedPct).toFixed(2)}%`
-                                      : '—'}
-                                  </dd>
-                                </div>
-                              </>
-                            ) : null}
-                            {ecomOrderMetrics.cardPaymentLabels && ecomOrderMetrics.cardPaymentLabels.length > 0 ? (
-                              <div className="pt-3 mt-1 border-t border-ink/8">
-                                <div className="text-[12px] text-ink-500 mb-1.5">{ecomOrderMetricsUi.cardMixLabel}</div>
-                                <ul className="text-[12px] text-ink-700 space-y-1 list-disc list-inside leading-snug">
-                                  {ecomOrderMetrics.cardPaymentLabels.map((lab) => (
-                                    <li key={lab}>{lab}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            ) : null}
-                          </dl>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {showPosSpotlightSummaryTable && posSpotlightTableUi && posSpotlightEffective ? (
-                    <div className="rounded-xl border border-ink/10 bg-cream-100/35 p-5">
-                      <div className="smallcaps text-ink-400 text-[11px] tracking-wide mb-1">POS</div>
-                      <div className="font-serif text-lg text-ink mb-3">{posSpotlightTableUi.spotlightSectionTitle}</div>
-                      <dl className="space-y-0 text-[13px] text-ink-600">
-                        <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                          <dt className="text-ink-500 shrink-0">{posSpotlightTableUi.batchIdLabel}</dt>
-                          <dd className="font-mono text-right text-ink text-[12px] leading-snug break-all max-w-[min(100%,18rem)]">
-                            {(() => {
-                              const p = posSpotlightEffective;
-                              const b = p?.batchId != null && String(p.batchId).trim() ? String(p.batchId).trim() : '';
-                              const o = p?.orderOrTxnId != null && String(p.orderOrTxnId).trim() ? String(p.orderOrTxnId).trim() : '';
-                              if (p?.transactionLine && o) return o + (b && b !== '—' && b !== o ? ` · ${b}` : '');
-                              return b || o || '—';
-                            })()}
-                          </dd>
-                        </div>
-                        <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                          <dt className="text-ink-500 shrink-0 max-w-[55%] leading-snug">{posSpotlightTableUi.transactionCountLabel}</dt>
-                          <dd className="font-mono tabular text-right">
-                            {posSpotlightEffective.transactionCount != null &&
-                            Number.isFinite(Number(posSpotlightEffective.transactionCount))
-                              ? String(Math.round(Number(posSpotlightEffective.transactionCount)))
-                              : '—'}
-                          </dd>
-                        </div>
-                        <div className="flex justify-between gap-4 border-b border-ink/8 py-2.5">
-                          <dt className="text-ink-500 shrink-0">{posSpotlightTableUi.commissionLabel}</dt>
-                          <dd className="font-mono tabular text-right">
-                            {posSpotlightEffective.commission != null && Number.isFinite(Number(posSpotlightEffective.commission))
-                              ? fmt(Number(posSpotlightEffective.commission))
-                              : '—'}
-                          </dd>
-                        </div>
-                        <div className="flex justify-between gap-4 py-2.5">
-                          <dt className="text-ink-500 shrink-0">{posSpotlightTableUi.impliedPctLabel}</dt>
-                          <dd className="font-mono tabular text-right">
-                            {posSpotlightEffective.impliedPct != null && Number.isFinite(Number(posSpotlightEffective.impliedPct))
-                              ? `${Number(posSpotlightEffective.impliedPct).toFixed(2)}%`
-                              : '—'}
-                          </dd>
-                        </div>
-                        {posCardPaymentLabels.length > 0 ? (
-                          <div className="pt-3 mt-1 border-t border-ink/8">
-                            <div className="text-[12px] text-ink-500 mb-1.5">Card / payment (from POS rows)</div>
-                            <ul className="text-[12px] text-ink-700 space-y-1 list-disc list-inside leading-snug">
-                              {posCardPaymentLabels.map((lab) => (
-                                <li key={lab}>{lab}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                      </dl>
-                    </div>
-                  ) : null}
+          <div className="space-y-6 max-w-5xl">
+            <div>
+              <div className="smallcaps text-ink-400 text-[11px] tracking-wide mb-1">Discrepancy</div>
+              <div className="font-serif text-xl text-ink">Highest commission — POS &amp; E‑commerce</div>
+              <p className="text-[12px] text-ink-500 mt-2 max-w-3xl leading-relaxed">
+                Each table is one row: the batch or order on this parse that paid the largest commission, the fee amount,
+                and the effective percentage for that line.
+              </p>
+            </div>
+            <div
+              className={`grid gap-6 ${hasPosCommissionTable && hasEcomCommissionTable ? 'lg:grid-cols-2' : 'grid-cols-1'}`}
+            >
+              {hasPosCommissionTable ? (
+                <div className="min-w-0 overflow-x-auto rounded-lg border hair">
+                  <table className="w-full text-sm min-w-[280px] border-collapse">
+                    <caption className="caption-top py-3 px-3 text-left font-serif text-lg text-ink border-b hair bg-cream-200/40">
+                      POS
+                    </caption>
+                    <thead>
+                      <tr className="bg-cream-200/50 text-left smallcaps text-ink-500 text-[11px]">
+                        <th className="py-2.5 px-3 font-medium">
+                          {commissionSpotlightTableHeader(posSpotlightTableUi.batchIdLabel, 'Batch / order')}
+                        </th>
+                        <th className="py-2.5 px-3 font-medium text-right">
+                          {commissionSpotlightTableHeader(posSpotlightTableUi.commissionLabel, 'Commission')}
+                        </th>
+                        <th className="py-2.5 px-3 font-medium text-right">
+                          {commissionSpotlightTableHeader(posSpotlightTableUi.impliedPctLabel, 'Effective %')}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="text-ink">
+                        <td className="py-3 px-3 font-mono text-[12px] break-all max-w-[min(100%,20rem)] align-top">
+                          {posBatchOrderDisplay}
+                        </td>
+                        <td className="py-3 px-3 font-mono tabular text-right align-top whitespace-nowrap">
+                          {posSpotlightEffective.commission != null &&
+                          Number.isFinite(Number(posSpotlightEffective.commission))
+                            ? fmt(Number(posSpotlightEffective.commission))
+                            : '—'}
+                        </td>
+                        <td className="py-3 px-3 font-mono tabular text-right align-top whitespace-nowrap">
+                          {posSpotlightEffective.impliedPct != null &&
+                          Number.isFinite(Number(posSpotlightEffective.impliedPct))
+                            ? `${Number(posSpotlightEffective.impliedPct).toFixed(2)}%`
+                            : '—'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-                <p className="text-[11px] text-ink-400 max-w-3xl leading-relaxed">
-                  When several settlement lines share one batch, transaction counts follow the line with the largest fee
-                  (not file order), then fall back to summed line counts.
-                </p>
-              </>
-            ) : null}
+              ) : null}
+              {hasEcomCommissionTable ? (
+                <div className="min-w-0 overflow-x-auto rounded-lg border hair">
+                  <table className="w-full text-sm min-w-[280px] border-collapse">
+                    <caption className="caption-top py-3 px-3 text-left font-serif text-lg text-ink border-b hair bg-cream-200/40">
+                      E‑commerce
+                    </caption>
+                    <thead>
+                      <tr className="bg-cream-200/50 text-left smallcaps text-ink-500 text-[11px]">
+                        <th className="py-2.5 px-3 font-medium">
+                          {commissionSpotlightTableHeader(
+                            ecomSpotlight && ecomSpotlightUi
+                              ? ecomSpotlightUi.primaryIdLabel
+                              : ecomOrderMetricsUi.highestOrderLabel,
+                            'Order / line',
+                          )}
+                        </th>
+                        <th className="py-2.5 px-3 font-medium text-right">
+                          {commissionSpotlightTableHeader(
+                            ecomSpotlight && ecomSpotlightUi
+                              ? ecomSpotlightUi.commissionLabel
+                              : ecomOrderMetricsUi.highestAmountLabel,
+                            'Commission',
+                          )}
+                        </th>
+                        <th className="py-2.5 px-3 font-medium text-right">
+                          {commissionSpotlightTableHeader(
+                            ecomSpotlight && ecomSpotlightUi
+                              ? ecomSpotlightUi.impliedPctLabel
+                              : ecomOrderMetricsUi.highestPctLabel,
+                            'Effective %',
+                          )}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="text-ink">
+                        <td className="py-3 px-3 font-mono text-[12px] break-all max-w-[min(100%,20rem)] align-top">
+                          {ecomSpotlight && ecomSpotlightUi
+                            ? ecomSpotlight.primaryId != null && String(ecomSpotlight.primaryId).trim()
+                              ? String(ecomSpotlight.primaryId).trim()
+                              : '—'
+                            : ecomOrderMetrics?.highest
+                              ? ecomOrderMetrics.highest.orderId
+                              : '—'}
+                        </td>
+                        <td className="py-3 px-3 font-mono tabular text-right align-top whitespace-nowrap">
+                          {ecomSpotlight && ecomSpotlightUi
+                            ? ecomSpotlight.commission != null && Number.isFinite(Number(ecomSpotlight.commission))
+                              ? fmt(Number(ecomSpotlight.commission))
+                              : '—'
+                            : ecomOrderMetrics?.highest
+                              ? fmt(ecomOrderMetrics.highest.fee)
+                              : '—'}
+                        </td>
+                        <td className="py-3 px-3 font-mono tabular text-right align-top whitespace-nowrap">
+                          {ecomSpotlight && ecomSpotlightUi
+                            ? ecomSpotlight.impliedPct != null && Number.isFinite(Number(ecomSpotlight.impliedPct))
+                              ? `${Number(ecomSpotlight.impliedPct).toFixed(2)}%`
+                              : '—'
+                            : ecomOrderMetrics?.highest?.impliedPct != null
+                              ? `${Number(ecomOrderMetrics.highest.impliedPct).toFixed(2)}%`
+                              : '—'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
           </div>
           <GrossVsBankChannelTable
             summary={channelGrossBankSummary}

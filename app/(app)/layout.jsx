@@ -20,7 +20,7 @@ const NAV = [
 ];
 
 export default function AppLayout({ children }) {
-  const { isAuthenticated, user, statements, getCurrentStatement } = useApp();
+  const { isAuthenticated, user, statements, getCurrentStatement, unreadNotificationCount } = useApp();
   const [navOpen, setNavOpen] = useState(false);
   const [searchVal, setSearchVal] = useState('');
   const pathname = usePathname();
@@ -54,10 +54,11 @@ export default function AppLayout({ children }) {
           {NAV.map(({ key, label, icon, tier }) => {
             const locked = tier && !tierOk(user.tier, tier);
             const active = pathname.startsWith(key);
+            const unreadNav = key === '/notifications' && unreadNotificationCount > 0;
             return (
               <Link key={key} href={key} onClick={() => setNavOpen(false)}
                 className={`w-full flex items-center gap-3 px-3 h-9 rounded-lg text-[13px] transition ${active ? 'bg-ink text-cream' : 'text-ink-500 hover:bg-ink/5'}`}>
-                {icon && <span className="shrink-0">{icon}</span>}
+                {icon && <span className="shrink-0 relative">{icon}{unreadNav ? <span className="absolute -top-0.5 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-teal text-[9px] font-mono text-ink flex items-center justify-center">{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</span> : null}</span>}
                 <span className="flex-1 truncate">{label}</span>
                 {tier === 'L2' && !active && <Pill tone="leaf" className="!text-[9px] !py-0">L2</Pill>}
                 {key === '/upgrade' && user.tier === 'Free' && !active && <Pill tone="teal" className="!text-[9px] !py-0">Upgrade</Pill>}
@@ -87,7 +88,14 @@ export default function AppLayout({ children }) {
               <div className="w-8 h-8 rounded-full bg-ink text-cream flex items-center justify-center text-[12px] font-medium">{user.initials || 'HR'}</div>
               <div className="min-w-0">
                 <div className="text-[13px] truncate">{user.business || user.name}</div>
-                <div className="flex items-center gap-1"><TierBadge tier={user.tier} /></div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  <TierBadge tier={user.tier} />
+                  {Array.isArray(user.roles) && user.roles.includes('admin') ? (
+                    <Pill tone="ink" className="!text-[9px] !py-0">
+                      Admin
+                    </Pill>
+                  ) : null}
+                </div>
               </div>
             </div>
             {user.tier === 'Free' && (
@@ -123,10 +131,15 @@ export default function AppLayout({ children }) {
             </div>
             <Link
               href="/notifications"
-              className="w-9 h-9 rounded-full border hair flex items-center justify-center hover:bg-ink/5 transition shrink-0"
-              aria-label="Notifications"
+              className="relative w-9 h-9 rounded-full border hair flex items-center justify-center hover:bg-ink/5 transition shrink-0"
+              aria-label={unreadNotificationCount > 0 ? `Notifications, ${unreadNotificationCount} unread` : 'Notifications'}
             >
               <Icon.Bell size={15} />
+              {unreadNotificationCount > 0 ? (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-teal text-[10px] font-mono font-medium text-ink flex items-center justify-center leading-none">
+                  {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                </span>
+              ) : null}
             </Link>
             <div className="w-9 h-9 rounded-full bg-ink text-cream flex items-center justify-center text-[12px] font-medium">{user.initials || 'HR'}</div>
           </div>

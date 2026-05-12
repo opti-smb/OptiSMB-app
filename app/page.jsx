@@ -177,7 +177,7 @@ export default function MarketingPage() {
             </div>
             <div className="mt-10 flex flex-wrap items-center gap-5 text-[12px] text-ink-400">
               <div className="flex items-center gap-2"><Icon.Shield size={14} /> US data residency</div>
-              <div className="flex items-center gap-2"><Icon.Lock size={14} /> AES-256 encrypted</div>
+              <div className="flex items-center gap-2"><Icon.Lock size={14} /> AES-256 for personal &amp; sensitive data</div>
               <div className="flex items-center gap-2"><Icon.Info size={14} /> Not a financial adviser</div>
             </div>
           </div>

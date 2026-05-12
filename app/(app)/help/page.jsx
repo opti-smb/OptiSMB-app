@@ -19,7 +19,7 @@ const FAQS = [
   },
   {
     q: 'How is my data kept secure?',
-    a: 'US data residency on AWS, encrypted at rest with AES-256 and in transit with TLS 1.3. You can delete everything in Settings. Audit logs are retained for 7 years per US financial regulations, but your statements and personal data are purged within 30 days of a deletion request.',
+    a: 'US data residency on AWS. TLS 1.3 in transit. Application-layer AES-256-GCM is used for personal identifiers and storage secrets (for example account email and object keys); structured statement metrics are stored as JSON and protected by the database provider\'s encryption at rest. You can delete everything in Settings. Audit logs are retained for 7 years per US financial regulations, but your statements and personal data are purged within 30 days of a deletion request.',
   },
   {
     q: 'What formats can I upload?',

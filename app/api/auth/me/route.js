@@ -30,6 +30,7 @@ export async function GET(request) {
       industry: user.industry ?? undefined,
       country: user.country ?? undefined,
       tier: user.tier,
+      roles: Array.isArray(user.roles) ? user.roles : ['user'],
     },
   });
 }

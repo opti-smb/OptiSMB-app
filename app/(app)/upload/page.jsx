@@ -15,7 +15,7 @@ import { inferStatementRole, readWorkbookSheetNamesFromFile, resolveRoleWhenSlot
 import { PLEASE_UPLOAD_PROPER_BANK_STATEMENT } from '@/lib/statementUploadMessages';
 import { buildStatementClientModel } from '@/lib/statementClientModel';
 
-/** @typedef {{ fileName: string; parsedData: object; isDemo: boolean; parseMethod: string; extractionRatio: number | null; inferenceConfidence: string; inferenceReasons: string[]; inferenceScores: { pos: number; ecommerce: number; bank: number; reconciliation: number } }} LinkedPart */
+/** @typedef {{ fileName: string; fileSizeBytes: number; parsedData: object; isDemo: boolean; parseMethod: string; extractionRatio: number | null; inferenceConfidence: string; inferenceReasons: string[]; inferenceScores: { pos: number; ecommerce: number; bank: number; reconciliation: number } }} LinkedPart */
 
 const ROLE_SLOTS = [
   { key: 'pos', title: '1 · POS / in-store', hint: 'Square, Clover, terminal, in-store card sales.' },
@@ -167,6 +167,7 @@ export default function UploadPage() {
 
       const stmt = {
         fileName: f.name,
+        fileSizeBytes: typeof f.size === 'number' && f.size >= 0 ? f.size : 0,
         fileType: fileTypeNorm,
         statementCategory,
         acquirer: finalData.acquirer_name || 'Unknown Acquirer',
@@ -272,6 +273,7 @@ export default function UploadPage() {
         const had = prev[useRole];
         const part = {
           fileName: f.name,
+          fileSizeBytes: typeof f.size === 'number' && f.size >= 0 ? f.size : 0,
           parsedData: r.parsedDataForStmt,
           isDemo: r.isDemo,
           parseMethod: r.parseMethod,
@@ -367,8 +369,15 @@ export default function UploadPage() {
     const fileLabel = `Combined — ${period}`;
     const uploadKindDescription = getUploadFileKindDescription(mergedPd, fileLabel);
 
+    const linkedBytes =
+      (pos.fileSizeBytes || 0) +
+      (ecommerce.fileSizeBytes || 0) +
+      (bank.fileSizeBytes || 0) +
+      (reconciliation?.fileSizeBytes || 0);
+
     const stmt = {
       fileName: fileLabel,
+      fileSizeBytes: linkedBytes,
       fileType: normalizeStatementFileType(mergedPd.file_type ?? null, fileLabel, ''),
       statementCategory: 'triple_set',
       acquirer: mergedPd.acquirer_name || 'Combined',

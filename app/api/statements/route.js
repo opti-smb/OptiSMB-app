@@ -34,9 +34,9 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'body_required' }, { status: 400 });
   }
   try {
-    const row = await createStatementForUser(userId, body);
+    const { row, duplicate } = await createStatementForUser(userId, body);
     const statement = dbStatementToClient(row);
-    return NextResponse.json({ ok: true, statement });
+    return NextResponse.json({ ok: true, statement, duplicate });
   } catch (e) {
     console.error('[statements POST]', e);
     return NextResponse.json({ ok: false, error: 'save_failed', message: String(e?.message || e) }, { status: 500 });
